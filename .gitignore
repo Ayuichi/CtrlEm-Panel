@@ -1,0 +1,22 @@
+# Personal data. Created on this computer. Do not commit or share.
+config.json
+library.json
+sequences.json
+albums.json
+pomf-mirrors.json
+thumbs/
+
+# Local notes and comparison copies. Not part of the program.
+AGENTS.md
+Agents.md
+alternative programs for comparison/
+
+# Work files
+*.tmp
+*.log
+node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini

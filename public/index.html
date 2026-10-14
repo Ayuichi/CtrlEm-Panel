@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CtrlEm Panel</title>
+<script>
+(function () {
+  var ok = { dark: 1, light: 1, bimbo: 1, night: 1, nature: 1 };
+  var q = '';
+  try { q = new URLSearchParams(location.search).get('theme') || ''; } catch (e) {}
+  var t = ok[q] ? q : '';
+  if (!t) { try { t = localStorage.getItem('ctrlem-theme') || ''; } catch (e) {} }
+  if (!ok[t]) t = 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%237c6cf0'/><path d='M9 16h14M16 9v14' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>CtrlEm Panel</h1>
+  <span id="status" class="status">Starting…</span>
+  <span class="spacer"></span>
+  <span id="rate" class="rate" title="Commands sent in the last minute"></span>
+  <label class="theme-pick" title="Panel style"><span>Style</span>
+    <select id="themePick">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="bimbo">Bimbo</option>
+      <option value="night">Night city</option>
+      <option value="nature">Nature</option>
+    </select>
+  </label>
+  <button id="btnSettings" type="button" class="ghost" title="Settings">Settings</button>
+</header>
+
+<main class="layout">
+  <!-- People -->
+  <section class="panel people">
+    <div class="panel-head">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="online">Online <span id="countOnline" class="count"></span></button>
+        <button class="tab" data-tab="favorites">Favorites <span id="countFav" class="count"></span></button>
+      </div>
+      <button id="btnRefresh" class="ghost icon" title="Refresh list">↻</button>
+    </div>
+    <input id="search" type="search" placeholder="Filter by name, code, likes or limits">
+    <ul id="userList" class="user-list"></ul>
+    <form id="addCode" class="add-code">
+      <input id="codeInput" placeholder="Control code" maxlength="12" autocomplete="off">
+      <button type="submit">Look up</button>
+    </form>
+  </section>
+
+  <!-- Composer -->
+  <section class="panel composer">
+    <div id="targets" class="targets"></div>
+    <p class="hint">Pomf on a person sends them a Pomf link. The panel copies each file the first time. Everyone else still gets the original link.</p>
+    <div id="details" class="details"></div>
+
+    <div id="cmdTabs" class="cmd-tabs"></div>
+    <form id="cmdForm" class="cmd-form">
+      <div id="cmdHelp" class="help"></div>
+
+      <div class="field" data-for="media">
+        <label for="argUrl" id="argUrlLabel">Link</label>
+        <div class="row">
+          <input id="argUrl" placeholder="https://… or drop / pick a file" autocomplete="off">
+          <label id="fileBtn" class="button ghost file-btn">Files…<input id="filePick" type="file" multiple hidden></label>
+          <button type="button" id="saveLink" class="ghost" title="Keep this link in the selected album without uploading the file">Save link</button>
+        </div>
+        <label id="uploadAlbumWrap">Put uploads in
+          <select id="uploadAlbum"><option value="">No album</option></select></label>
+        <label>Host
+          <select id="uploadHost" title="Where new files are uploaded">
+            <option value="pone">pone.rs</option>
+            <option value="catbox">Catbox</option>
+          </select></label>
+        <div id="dropZone" class="drop">Drop files here. One file uploads at a time. Use + when you want a saved file in the sequence.</div>
+        <div id="uploadState" class="upload-state"></div>
+        <div id="preview" class="preview"></div>
+      </div>
+
+      <div class="field" data-for="text">
+        <label for="argText" id="argTextLabel">Text</label>
+        <textarea id="argText" rows="3" maxlength="2000"></textarea>
+      </div>
+
+      <div class="row opts">
+        <label id="countWrap" title="How many times to type the text (1 to 5)">Count
+          <input id="argCount" type="number" min="1" max="5" value="1"></label>
+        <label>Device
+          <select id="argDevice"><option value="">Any</option><option value="DESKTOP">Desktop</option><option value="ANDROID">Android</option></select></label>
+        <span class="spacer"></span>
+        <button id="btnSend" type="submit" class="primary">Send</button>
+      </div>
+    </form>
+
+    <h2 class="sub">Sequence</h2>
+    <p class="hint">Images, videos, sounds, messages, blank screens, reaction tests, and lock input, sent in this order. Edit builds the list. Send plays a copy of it, so the next one can be built while a send is still going. Keep this page open. They have to keep CtrlEm running. The wait is the pause before the next item, at least 3 seconds. CtrlEm decides how long each popup stays on screen. A blank screen is still once every 30 seconds per person, so a sooner blank is skipped for that person. Lock input and blank screen are desktop only.</p>
+    <div class="tabs seq-tabs" role="tablist">
+      <button type="button" class="seq-tab active" data-seq-tab="edit" role="tab" aria-selected="true">Edit</button>
+      <button type="button" class="seq-tab" data-seq-tab="send" role="tab" aria-selected="false">Send</button>
+    </div>
+    <p id="seqRunStatus" class="hint hidden"></p>
+    <div id="seqEdit">
+      <div class="row seq-bar">
+        <input id="seqName" placeholder="Sequence name" maxlength="60" autocomplete="off">
+        <select id="seqPick" title="Saved sequences"><option value="">Saved sequences</option></select>
+        <button type="button" id="seqSave">Save</button>
+        <button type="button" id="seqNew" class="ghost">New</button>
+        <button type="button" id="seqDelete" class="ghost">Delete</button>
+      </div>
+      <ol id="seqSteps" class="seq-steps"></ol>
+      <div class="row seq-bar">
+        <button type="button" id="seqAdd">Add current link</button>
+        <button type="button" id="seqAddMessage" class="ghost" title="Adds the text in the Message box">Add message</button>
+        <button type="button" id="seqAddBlank" class="ghost" title="Desktop only. Once every 30 seconds per person.">Add blank</button>
+        <button type="button" id="seqAddReaction" class="ghost" title="Runs a reaction test. No link.">Add reaction test</button>
+        <button type="button" id="seqAddLock" class="ghost" title="Desktop only. Locks the keyboard and mouse.">Add lock input</button>
+        <label>Wait <input id="seqWait" type="number" min="3" max="600" value="5"> s</label>
+      </div>
+      <p id="seqStatus" class="hint"></p>
+    </div>
+    <div id="seqSend" class="hidden">
+      <p id="seqRunLabel" class="hint">Play sends the sequence open in Edit, copied at that moment.</p>
+      <ol id="seqRun" class="seq-steps"></ol>
+      <div class="row seq-bar">
+        <span class="spacer"></span>
+        <button type="button" id="seqStop" class="ghost" disabled>Stop</button>
+        <button type="button" id="seqPlay" class="primary">Play</button>
+      </div>
+    </div>
+
+    <h2 class="sub">Activity</h2>
+    <ul id="activity" class="activity"></ul>
+  </section>
+
+  <!-- Library -->
+  <section class="panel library">
+    <div class="panel-head">
+      <h2>Uploaded files</h2>
+      <select id="libFilter"><option value="">All</option><option value="image">Images</option><option value="video">Videos</option><option value="audio">Sounds</option></select>
+    </div>
+    <div class="row album-bar">
+      <select id="albumView" title="Which files to show"><option value="">All files</option></select>
+      <input id="albumName" placeholder="New album" maxlength="60" autocomplete="off">
+      <button type="button" id="albumCreate">New</button>
+      <button type="button" id="albumDelete" class="ghost" title="Removes the album. The files stay in All files.">Delete</button>
+      <button type="button" id="albumAddAll" class="ghost" title="Add every image, video, and sound currently shown to the sequence">Add all</button>
+    </div>
+    <p id="libHint" class="hint">Click a file to use it once. Click its name to rename it. + adds it to the sequence. The same file again reuses its saved link. Images stay still. Rest on one to play it.</p>
+    <div id="libGrid" class="lib-grid"></div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <form id="settingsForm">
+    <h2>Settings</h2>
+    <label>CtrlEm API key
+      <input id="setKey" type="password" autocomplete="off" placeholder="Leave empty to keep the current key"></label>
+    <p id="keyHint" class="hint"></p>
+    <label>Litterbox lifetime for files over 200 MB
+      <select id="setExpiry"><option>1h</option><option>12h</option><option selected>24h</option><option>72h</option></select></label>
+    <label>Commands per minute limit
+      <input id="setRate" type="number" min="1" max="20"></label>
+    <p class="hint">Files up to 200 MB go to Catbox. A saved link keeps working, and each time someone opens it the 2-year inactivity clock starts over. Larger files go to Litterbox and expire. Albums here only group those saved links. CtrlEm allows 20 commands a minute.</p>
+    <div class="row"><button type="button" id="setCancel" class="ghost">Cancel</button><span class="spacer"></span><button id="setSave" type="submit" class="primary">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="rawDlg">
+  <form method="dialog">
+    <h2 id="rawTitle">Raw response</h2>
+    <pre id="rawBody" class="raw"></pre>
+    <div class="row"><span class="spacer"></span><button class="primary">Close</button></div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
