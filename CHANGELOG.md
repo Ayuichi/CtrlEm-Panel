@@ -2,6 +2,12 @@
 
 ## 2026-10-14
 
+### A frame for each video
+
+A video in the file list shows one frame, kept in the `thumbs` folder with the image previews. A play mark stays on it. Resting on a video does not play it. Click the file to load it in the send preview. An mkv stays a title card, because the browser cannot draw a frame from it.
+
+Close the panel and start it again so this can load, then refresh the page.
+
 ### Update from GitHub
 
 When the page opens, the panel checks whether GitHub has a newer copy. **Update available** shows in the header when it does. The button downloads the program files. Your key, library, albums, sequences, and preview pictures stay where they are. Close the panel and start it again, then refresh the page.

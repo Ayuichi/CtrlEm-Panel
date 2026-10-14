@@ -57,7 +57,7 @@ New files upload one at a time. Pick the host above the drop area:
 
 Click a file's name to rename it in the list. The link stays the same. This is most useful for sounds, which have no picture.
 
-An image in the list is a small still picture. The panel makes that picture the first time the tile is on screen and keeps it in the `thumbs` folder. Rest on a picture to play that one image. A video stays as a title card until you click it.
+An image or a video in the list is a small still picture. The panel makes that picture the first time the tile is on screen and keeps it in the `thumbs` folder. Rest on a picture to play that one image. A video shows one frame, with a play mark, and does not play from the tile. An mkv stays a title card. Click a file to load it in the send preview.
 
 ## Files you should not share
 

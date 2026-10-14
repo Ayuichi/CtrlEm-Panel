@@ -872,8 +872,8 @@ function renderLibrary() {
     const album = state.albums.find(a => a.id === state.albumView);
     const hint = $('#libHint');
     if (hint) hint.textContent = album
-      ? 'This album only groups saved links. Click a name to rename it. + adds one file to the sequence. × takes it out of the album. The Catbox file stays. Images stay still. Rest on one to play it.'
-      : 'Click a file to use it once. Click its name to rename it. + adds it to the sequence. The same file again reuses its saved link. Images stay still. Rest on one to play it.';
+      ? 'This album only groups saved links. Click a name to rename it. + adds one file to the sequence. × takes it out of the album. The Catbox file stays. Images and videos stay still. Rest on a picture to play it.'
+      : 'Click a file to use it once. Click its name to rename it. + adds it to the sequence. The same file again reuses its saved link. Images and videos stay still. Rest on a picture to play it.';
     const items = visibleFiles();
     if (naming && !items.some(entry => entry.hash === naming.hash)) naming = null;
     const grid = $('#libGrid'); grid.replaceChildren();
@@ -902,7 +902,7 @@ function renderLibrary() {
         onclick: ev => { if (ev.target.closest('button, input')) return; useLibrary(entry); },
       }, thumb, cap, addBtn, remove);
       grid.append(item);
-      if (entry.kind === 'image' && safe) prepareImageTile(item, entry);
+      if (canPreview(entry, safe)) prepareTile(item, entry);
     }
     focus = naming ? grid.querySelector('input.cap') : null;
   } finally {
@@ -917,9 +917,11 @@ function renderLibrary() {
   }
 }
 
-// Still previews. The grid never points at the remote file. One image is fetched at a time,
-// drawn down to a small JPEG, and kept by the server. Hover plays that one file.
+// Still previews. The grid never points at the remote file. One file is fetched at a time,
+// drawn down to a small JPEG, and kept by the server. Hover plays that one image.
+// A video contributes one frame and does not play from the tile.
 const THUMB_EDGE = 168;
+const VIDEO_THUMB_MS = 60000;
 const thumbBlobs = new Map();
 const thumbFailed = new Set();
 const thumbQueued = new Set();
@@ -942,21 +944,41 @@ function dropStaleThumbs() {
     thumbFailed.delete(hash);
   }
 }
-function stillImage(url) {
-  return el('img', { class: 'still', src: url, alt: '', decoding: 'async', title: 'Rest here to play it' });
+function stillImage(url, kind) {
+  const img = el('img', { class: 'still', src: url, alt: '', decoding: 'async' });
+  if (kind !== 'video') img.title = 'Rest here to play it';
+  return img;
+}
+function playMark() {
+  return el('span', { class: 'mark', 'aria-hidden': 'true' }, '▶');
+}
+function kindMark(entry) {
+  const glyph = entry.kind === 'video' ? '▶' : entry.kind === 'audio' ? '♪' : '•';
+  return el('span', { class: 'kind', 'aria-hidden': 'true' }, glyph);
+}
+// The page can draw a frame from mp4, webm, and most mov files. mkv stays a title card.
+function canPreview(entry, safe) {
+  if (!entry || !safe) return false;
+  if (entry.kind === 'image') return true;
+  if (entry.kind !== 'video') return false;
+  const name = String(entry.name || entry.url || '').toLowerCase().split(/[?#]/)[0];
+  return !name.endsWith('.mkv');
+}
+function thumbFace(entry, url) {
+  const img = stillImage(url, entry.kind);
+  return entry.kind === 'video' ? [img, playMark()] : img;
 }
 function libraryThumb(entry, safe) {
-  if (entry.kind === 'video') return el('span', { class: 'kind', 'aria-hidden': 'true' }, '▶');
-  if (entry.kind === 'image' && safe) {
+  if (canPreview(entry, safe)) {
     const ready = thumbBlobs.get(entry.hash);
-    if (ready) return stillImage(ready);
-    if (thumbFailed.has(entry.hash)) return el('span', { class: 'kind', 'aria-hidden': 'true' }, '•');
+    if (ready) return thumbFace(entry, ready);
+    if (thumbFailed.has(entry.hash)) return kindMark(entry);
     return el('span', { class: 'kind wait', 'aria-hidden': 'true' }, '');
   }
-  return el('span', { class: 'kind', 'aria-hidden': 'true' }, entry.kind === 'audio' ? '♪' : '•');
+  return kindMark(entry);
 }
-function prepareImageTile(item, entry) {
-  bindTileMotion(item);
+function prepareTile(item, entry) {
+  if (entry.kind === 'image') bindTileMotion(item);
   if (thumbBlobs.has(entry.hash)) return;
   if (entry.thumb) { showSavedThumb(entry.hash); return; }
   if (!thumbFailed.has(entry.hash)) getThumbObserver().observe(item);
@@ -974,7 +996,7 @@ function getThumbObserver() {
 function enqueueThumb(hash) {
   if (!hash || thumbBlobs.has(hash) || thumbFailed.has(hash) || thumbQueued.has(hash)) return;
   const entry = state.library.find(item => item && item.hash === hash);
-  if (!entry || entry.kind !== 'image' || !safeHttp(entry.url)) return;
+  if (!canPreview(entry, entry && safeHttp(entry.url))) return;
   if (entry.thumb) { showSavedThumb(hash); return; }
   thumbQueued.add(hash);
   thumbQueue.push(hash);
@@ -997,7 +1019,8 @@ async function pumpThumbs() {
         const failed = tileByHash(hash);
         if (failed && thumbObserver) thumbObserver.unobserve(failed);
         const hold = failed && failed.querySelector('.kind');
-        if (hold) hold.textContent = '•';
+        const missed = state.library.find(item => item && item.hash === hash);
+        if (hold) hold.textContent = missed && missed.kind === 'video' ? '▶' : '•';
       } finally {
         thumbQueued.delete(hash);
       }
@@ -1045,18 +1068,104 @@ function paintThumb(hash) {
   const url = thumbBlobs.get(hash);
   const tile = tileByHash(hash);
   if (!url || !tile) return;
+  const entry = state.library.find(item => item && item.hash === hash);
   let still = tile.querySelector('img.still');
   if (!still) {
-    still = stillImage(url);
+    still = stillImage(url, entry && entry.kind);
     const hold = tile.querySelector('.kind');
     if (hold) hold.replaceWith(still);
     else tile.prepend(still);
   } else if (still.getAttribute('src') !== url) still.src = url;
+  if (entry && entry.kind === 'video' && !tile.querySelector('.mark')) still.after(playMark());
   if (tile.dataset.wantLive === '1' && tile.matches(':hover')) startTileMotion(tile);
+}
+function frameBlob(source, sw, sh) {
+  const canvas = document.createElement('canvas');
+  canvas.width = THUMB_EDGE;
+  canvas.height = THUMB_EDGE;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const scale = Math.max(THUMB_EDGE / sw, THUMB_EDGE / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, THUMB_EDGE, THUMB_EDGE);
+  ctx.drawImage(source, (THUMB_EDGE - dw) / 2, (THUMB_EDGE - dh) / 2, dw, dh);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Could not make a preview')), 'image/jpeg', 0.72);
+  });
+}
+async function saveThumb(entry, jpeg) {
+  const save = await fetch('/api/library/' + entry.hash + '/thumb', {
+    method: 'POST',
+    headers: { 'X-Panel': '1', 'Content-Type': 'image/jpeg' },
+    body: jpeg,
+  });
+  if (!save.ok) throw new Error('Could not save the preview');
+  const url = URL.createObjectURL(jpeg);
+  const prev = thumbBlobs.get(entry.hash);
+  if (prev) URL.revokeObjectURL(prev);
+  thumbBlobs.set(entry.hash, url);
+  entry.thumb = true;
+  paintThumb(entry.hash);
+}
+function captureVideoFrame(src) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    let settled = false;
+    const finish = (err, blob) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.removeAttribute('src');
+      try { video.load(); } catch { /* the element is already stopping */ }
+      video.remove();
+      if (err) reject(err); else resolve(blob);
+    };
+    let drew = false;
+    const draw = () => {
+      if (drew || settled) return;
+      drew = true;
+      const sw = video.videoWidth;
+      const sh = video.videoHeight;
+      if (!sw || !sh) { finish(new Error('Could not read that video')); return; }
+      frameBlob(video, sw, sh).then(blob => finish(null, blob), finish);
+    };
+    const timer = setTimeout(() => finish(new Error('Could not read that video')), VIDEO_THUMB_MS);
+    video.className = 'thumb-probe';
+    video.setAttribute('aria-hidden', 'true');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.addEventListener('error', () => finish(new Error('Could not read that video')));
+    video.addEventListener('loadeddata', () => {
+      const dur = video.duration;
+      const at = Number.isFinite(dur) && dur > 0 ? Math.min(1, Math.max(0, dur * 0.1)) : 0;
+      if (!(at > 0.05) || Math.abs((video.currentTime || 0) - at) < 0.05) { draw(); return; }
+      // A seek that never lands still keeps the frame already on screen.
+      const seekTimer = setTimeout(draw, 8000);
+      video.addEventListener('seeked', () => { clearTimeout(seekTimer); draw(); }, { once: true });
+      try { video.currentTime = at; }
+      catch { clearTimeout(seekTimer); draw(); }
+    }, { once: true });
+    document.body.append(video);
+    video.src = src;
+  });
+}
+async function makeVideoThumb(entry) {
+  const ticketRes = await fetch('/api/library/' + entry.hash + '/ticket', {
+    method: 'POST',
+    headers: { 'X-Panel': '1' },
+  });
+  if (!ticketRes.ok) throw new Error('Could not make a preview');
+  const data = await ticketRes.json().catch(() => ({}));
+  if (!/^[a-f0-9]{36}$/.test(data.ticket || '')) throw new Error('Could not make a preview');
+  const jpeg = await captureVideoFrame('/api/library/' + entry.hash + '/file?ticket=' + data.ticket);
+  await saveThumb(entry, jpeg);
 }
 async function makeThumb(hash) {
   const entry = state.library.find(item => item && item.hash === hash);
-  if (!entry || entry.kind !== 'image') return;
+  if (!canPreview(entry, entry && safeHttp(entry.url))) return;
+  if (entry.kind === 'video') { await makeVideoThumb(entry); return; }
   const r = await fetch('/api/library/' + hash + '/file', { headers: { 'X-Panel': '1' } });
   if (!r.ok) throw new Error('Could not make a preview');
   const blob = await r.blob();
@@ -1073,31 +1182,7 @@ async function makeThumb(hash) {
     const sw = img.naturalWidth;
     const sh = img.naturalHeight;
     if (!sw || !sh) throw new Error('Could not read that image');
-    const canvas = document.createElement('canvas');
-    canvas.width = THUMB_EDGE;
-    canvas.height = THUMB_EDGE;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    const scale = Math.max(THUMB_EDGE / sw, THUMB_EDGE / sh);
-    const dw = sw * scale;
-    const dh = sh * scale;
-    ctx.fillStyle = '#111';
-    ctx.fillRect(0, 0, THUMB_EDGE, THUMB_EDGE);
-    ctx.drawImage(img, (THUMB_EDGE - dw) / 2, (THUMB_EDGE - dh) / 2, dw, dh);
-    const jpeg = await new Promise((resolve, reject) => {
-      canvas.toBlob(b => b ? resolve(b) : reject(new Error('Could not make a preview')), 'image/jpeg', 0.72);
-    });
-    const save = await fetch('/api/library/' + hash + '/thumb', {
-      method: 'POST',
-      headers: { 'X-Panel': '1', 'Content-Type': 'image/jpeg' },
-      body: jpeg,
-    });
-    if (!save.ok) throw new Error('Could not save the preview');
-    const url = URL.createObjectURL(jpeg);
-    const prev = thumbBlobs.get(hash);
-    if (prev) URL.revokeObjectURL(prev);
-    thumbBlobs.set(hash, url);
-    entry.thumb = true;
-    paintThumb(hash);
+    await saveThumb(entry, await frameBlob(img, sw, sh));
   } finally {
     URL.revokeObjectURL(sourceUrl);
   }

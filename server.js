@@ -98,10 +98,15 @@ function forgetHash(hash) {
 }
 
 // Still previews for the file grid. Personal, like the library. One JPEG per hash.
+// A video still is one frame. The browser asks for byte ranges, and each range stays
+// inside this window so a long file is not downloaded whole.
 const THUMBS_DIR = path.join(ROOT, 'thumbs');
 const THUMB_BYTES = 256 * 1024;
 const THUMB_SOURCE_MAX = 80 * 1024 * 1024;
+const THUMB_RANGE_MAX = 8 * 1024 * 1024;
+const PREVIEW_TICKET_MS = 5 * 60 * 1000;
 fs.mkdirSync(THUMBS_DIR, { recursive: true });
+const previewTickets = new Map();
 
 function thumbFile(hash) {
   return path.join(THUMBS_DIR, hash + '.jpg');
@@ -122,7 +127,59 @@ function sweepThumbs() {
   }
 }
 function libraryView(entry) {
-  return Object.assign({}, entry, { thumb: !!(entry && entry.kind === 'image' && thumbReady(entry.hash)) });
+  const still = entry && (entry.kind === 'image' || entry.kind === 'video');
+  return Object.assign({}, entry, { thumb: !!(still && thumbReady(entry.hash)) });
+}
+function issuePreviewTicket(hash) {
+  const now = Date.now();
+  for (const [token, row] of previewTickets) {
+    if (row.exp <= now) previewTickets.delete(token);
+  }
+  const token = crypto.randomBytes(18).toString('hex');
+  previewTickets.set(token, { hash, exp: now + PREVIEW_TICKET_MS });
+  return token;
+}
+function previewTicketOk(token, hash) {
+  if (!/^[a-f0-9]{36}$/.test(token || '')) return false;
+  const row = previewTickets.get(token);
+  if (!row || row.exp <= Date.now()) {
+    if (row) previewTickets.delete(token);
+    return false;
+  }
+  return row.hash === hash;
+}
+// One range, clamped. An open end would otherwise pull the rest of a long video.
+function previewRange(header) {
+  const raw = String(header || '').trim();
+  const suffix = /^bytes=-(\d+)$/.exec(raw);
+  if (suffix) {
+    const n = Math.min(Math.max(Number(suffix[1]) || 1, 1), THUMB_RANGE_MAX);
+    return 'bytes=-' + n;
+  }
+  let start = 0;
+  let end = THUMB_RANGE_MAX - 1;
+  const match = /^bytes=(\d+)-(\d*)$/.exec(raw);
+  if (match) {
+    const asked = Number(match[1]);
+    if (Number.isSafeInteger(asked) && asked >= 0) start = asked;
+    if (match[2] !== '') {
+      const stop = Number(match[2]);
+      if (Number.isSafeInteger(stop) && stop >= start) end = stop;
+    } else end = start + THUMB_RANGE_MAX - 1;
+    if (end < start) end = start + THUMB_RANGE_MAX - 1;
+    if (end - start + 1 > THUMB_RANGE_MAX) end = start + THUMB_RANGE_MAX - 1;
+  }
+  return 'bytes=' + start + '-' + end;
+}
+function previewSendType(kind, upstreamType, name) {
+  const type = String(upstreamType || '').split(';')[0].trim().toLowerCase();
+  if (kind !== 'video') return type.startsWith('image/') ? type : 'application/octet-stream';
+  if (type.startsWith('video/')) return type;
+  const ext = path.extname(String(name || '').split(/[?#]/)[0]).toLowerCase();
+  if (ext === '.webm') return 'video/webm';
+  if (ext === '.mov') return 'video/quicktime';
+  if (ext === '.mkv') return 'video/x-matroska';
+  return 'video/mp4';
 }
 sweepThumbs();
 
@@ -585,9 +642,15 @@ function readRaw(req, limit) {
   });
 }
 
-// Streams a library image to the page so the browser can draw one still frame.
+// Streams a library image or video to the page so the browser can draw one still frame.
 // The address comes from the saved entry. The original file is not kept.
-function pipeRemote(url, res, signal) {
+// Video requests carry a byte range. A host that ignores it and answers with the whole
+// file is refused once that answer is larger than one range window.
+function pipeRemote(url, res, signal, opts) {
+  const range = opts && opts.range || '';
+  const kind = opts && opts.kind === 'video' ? 'video' : 'image';
+  const name = opts && opts.name || '';
+  const cap = range ? THUMB_RANGE_MAX : THUMB_SOURCE_MAX;
   return new Promise((resolve, reject) => {
     let settled = false;
     let activeReq = null;
@@ -597,15 +660,18 @@ function pipeRemote(url, res, signal) {
       if (settled) return;
       settled = true;
       clearInterval(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
       if (err && activeReq) activeReq.destroy();
       if (err) reject(err); else resolve();
     };
+    const onAbort = () => finish(new Error('Cancelled'));
     const timer = setInterval(() => {
       if (signal && signal.aborted) finish(new Error('Cancelled'));
       else if (Date.now() - last > 5 * 60e3) finish(new Error('Download stalled'));
       else if (Date.now() - started > 10 * 60e3) finish(new Error('Download timed out'));
     }, 2000);
     timer.unref();
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
     if (signal && signal.aborted) { finish(new Error('Cancelled')); return; }
 
     const go = (next, redirects) => {
@@ -614,9 +680,14 @@ function pipeRemote(url, res, signal) {
       try { target = new URL(next); } catch { finish(new Error('That link is not a downloadable URL')); return; }
       const lib = target.protocol === 'https:' ? https : target.protocol === 'http:' ? http : null;
       if (!lib) { finish(new Error('That link is not a downloadable URL')); return; }
+      const headers = {
+        'User-Agent': 'CtrlEmPanel/1.0',
+        Accept: kind === 'video' ? 'video/*,*/*' : 'image/*,*/*',
+      };
+      if (range) headers.Range = range;
       const req = lib.request(target, {
         method: 'GET',
-        headers: { 'User-Agent': 'CtrlEmPanel/1.0', Accept: 'image/*,*/*' },
+        headers,
         timeout: 10 * 60e3,
       }, upstream => {
         const hop = [301, 302, 303, 307, 308];
@@ -626,9 +697,11 @@ function pipeRemote(url, res, signal) {
           else go(new URL(upstream.headers.location, target).href, redirects + 1);
           return;
         }
-        if (upstream.statusCode !== 200) {
+        const status = upstream.statusCode;
+        const ranged = status === 206 && !!range;
+        if (status !== 200 && !ranged) {
           upstream.resume();
-          finish(new Error('Download failed (' + upstream.statusCode + ')'));
+          finish(new Error('Download failed (' + status + ')'));
           return;
         }
         const type = String(upstream.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -638,20 +711,33 @@ function pipeRemote(url, res, signal) {
           return;
         }
         const announced = Number(upstream.headers['content-length']) || 0;
-        if (announced > THUMB_SOURCE_MAX) {
+        if (announced > cap) {
           upstream.destroy();
           finish(new Error('That file is too large for a preview'));
           return;
         }
+        const contentRange = String(upstream.headers['content-range'] || '');
+        if (ranged && !/^bytes \d+-\d+\/(\d+|\*)$/.test(contentRange)) {
+          upstream.resume();
+          finish(new Error('Download failed (206)'));
+          return;
+        }
         if (settled || res.writableEnded) { upstream.resume(); finish(new Error('Cancelled')); return; }
-        const sendType = type.startsWith('image/') ? type : 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': sendType, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        const out = {
+          'Content-Type': previewSendType(kind, type, name),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        };
+        if (range) out['Accept-Ranges'] = 'bytes';
+        if (ranged) out['Content-Range'] = contentRange;
+        if (announced) out['Content-Length'] = String(announced);
+        res.writeHead(ranged ? 206 : 200, out);
         let received = 0;
         upstream.on('data', chunk => {
           if (settled) return;
           received += chunk.length;
           last = Date.now();
-          if (received > THUMB_SOURCE_MAX) { finish(new Error('That file is too large for a preview')); res.destroy(); return; }
+          if (received > cap) { finish(new Error('That file is too large for a preview')); res.destroy(); return; }
           try {
             if (!res.write(chunk)) upstream.pause();
           } catch (err) { finish(err); }
@@ -671,15 +757,18 @@ function pipeRemote(url, res, signal) {
 }
 
 async function serveLibraryFile(req, res, entry) {
-  if (!entry || entry.kind !== 'image' || !isHttpUrl(entry.url)) {
+  const kind = entry && (entry.kind === 'image' || entry.kind === 'video') ? entry.kind : '';
+  if (!kind || !isHttpUrl(entry.url)) {
     return sendJson(res, 404, { error: 'That file is not in the list' });
   }
+  const range = kind === 'video' ? previewRange(req.headers.range) : '';
+  const label = entry.name && path.extname(entry.name) ? entry.name : (entry.url || entry.name || '');
   const ac = new AbortController();
   const stop = () => ac.abort();
   req.on('aborted', stop);
   res.on('close', () => { if (!res.writableEnded) stop(); });
   try {
-    await pipeRemote(entry.url, res, ac.signal);
+    await pipeRemote(entry.url, res, ac.signal, { range, kind, name: label });
   } catch (err) {
     if (res.headersSent) { if (!res.writableEnded) res.destroy(); return; }
     if (ac.signal.aborted || (err && err.message === 'Cancelled')) return;
@@ -887,7 +976,11 @@ const server = http.createServer(async (req, res) => {
 
   if (!p.startsWith('/api/')) return serveStatic(res, p);
   // Custom header forces a CORS preflight that we never answer, so other sites can't call the API.
-  if (req.headers['x-panel'] !== '1') return sendJson(res, 403, { error: 'Missing X-Panel header' });
+  // A video element cannot set that header. One file GET may instead carry a short-lived ticket
+  // minted by a request that did. The ticket is bound to that hash.
+  const fileMatch = req.method === 'GET' ? /^\/api\/library\/([a-f0-9]{64})\/file$/.exec(p) : null;
+  const ticketOk = !!(fileMatch && previewTicketOk(url.searchParams.get('ticket'), fileMatch[1]));
+  if (req.headers['x-panel'] !== '1' && !ticketOk) return sendJson(res, 403, { error: 'Missing X-Panel header' });
 
   try {
     let m;
@@ -1001,7 +1094,7 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = p.match(/^\/api\/library\/([a-f0-9]{64})\/thumb$/)) && req.method === 'POST') {
       const entry = library[m[1]];
-      if (!entry || entry.kind !== 'image') return sendJson(res, 404, { error: 'That file is not in the list' });
+      if (!entry || (entry.kind !== 'image' && entry.kind !== 'video')) return sendJson(res, 404, { error: 'That file is not in the list' });
       let buf;
       try { buf = await readRaw(req, THUMB_BYTES); }
       catch { return sendJson(res, 413, { error: 'That preview is too large' }); }
@@ -1015,6 +1108,11 @@ const server = http.createServer(async (req, res) => {
       fs.rmSync(dest, { force: true });
       fs.renameSync(tmp, dest);
       return sendJson(res, 200, { ok: true });
+    }
+    if ((m = p.match(/^\/api\/library\/([a-f0-9]{64})\/ticket$/)) && req.method === 'POST') {
+      const entry = library[m[1]];
+      if (!entry || entry.kind !== 'video' || !isHttpUrl(entry.url)) return sendJson(res, 404, { error: 'That file is not in the list' });
+      return sendJson(res, 200, { ticket: issuePreviewTicket(m[1]) });
     }
     if ((m = p.match(/^\/api\/library\/([a-f0-9]{64})\/file$/)) && req.method === 'GET') {
       await serveLibraryFile(req, res, library[m[1]]);
@@ -1108,4 +1206,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { updatePathOk, parseBuild };
+module.exports = { updatePathOk, parseBuild, previewRange, previewTicketOk, issuePreviewTicket, pipeRemote };
