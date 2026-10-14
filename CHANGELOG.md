@@ -2,6 +2,10 @@
 
 ## 2026-10-14
 
+### Update from GitHub
+
+When the page opens, the panel checks whether GitHub has a newer copy. **Update available** shows in the header when it does. The button downloads the program files. Your key, library, albums, sequences, and preview pictures stay where they are. Close the panel and start it again, then refresh the page.
+
 ### Still pictures in the file list
 
 Each image in the file list shows a small still picture. The panel makes that picture the first time the tile is on screen, one file at a time, and then reuses it. Rest on a picture to play that one image. Videos in the list stay as a title card. Clicking a file still loads it in the send preview.

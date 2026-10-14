@@ -1909,8 +1909,39 @@ function bind() {
   $('#settingsForm').addEventListener('submit', saveSettings);
 }
 
+let updateInfo = null;
+async function checkUpdate() {
+  try {
+    updateInfo = await api('/api/update');
+    const btn = $('#btnUpdate');
+    if (btn) btn.classList.toggle('hidden', !(updateInfo && updateInfo.update));
+  } catch { /* no button when GitHub, or an older panel, cannot answer */ }
+}
+async function onUpdate() {
+  if (state.playing || state.sending) { setStatus('Finish the send before updating.', 'bad'); return; }
+  if (updateInfo && updateInfo.dirty) {
+    setStatus('This folder has edits to the program. An update would replace them.', 'bad');
+    return;
+  }
+  const ok = confirm('Replace the panel files with the latest version? Your key, library, albums, sequences, and preview pictures stay. Close the panel and start it again afterwards.');
+  if (!ok) return;
+  const btn = $('#btnUpdate');
+  btn.disabled = true;
+  setStatus('Updating…');
+  try {
+    await api('/api/update', { method: 'POST' });
+    btn.classList.add('hidden');
+    setStatus('Updated. Close the panel window and start it again, then refresh this page.', 'ok');
+  } catch (err) {
+    btn.disabled = false;
+    setStatus(explain(err), 'bad');
+  }
+}
+
 async function init() {
   $('#btnSettings').addEventListener('click', () => openSettings());
+  const updateBtn = $('#btnUpdate');
+  if (updateBtn) updateBtn.addEventListener('click', onUpdate);
   bindTheme();
   try { bind(); }
   catch (err) { setStatus('This page failed to start: ' + err.message, 'bad'); }
@@ -1929,6 +1960,7 @@ async function init() {
   await pollRate();
   setInterval(() => pollRate(), 4000);
   setInterval(() => { if (!state.sending) loadUsers(true); }, 20000);
+  await checkUpdate();
 }
 
 init();

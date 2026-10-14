@@ -22,6 +22,8 @@ The **Style** menu in the header switches between dark, light, bimbo, night city
 
 If that address is already in use, the script assumes the panel is running and just opens the page.
 
+When a newer copy is on GitHub, **Update available** shows in the header. It replaces the program files. Your key, library, albums, sequences, and preview pictures stay. Close the panel and start it again, then refresh the page.
+
 You can also start it from this folder with:
 
 ```

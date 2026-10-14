@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "files": [
+    ".gitignore",
+    "CHANGELOG.md",
+    "README.md",
+    "Start Panel.bat",
+    "build.json",
+    "server.js",
+    "public/app.js",
+    "public/index.html",
+    "public/style.css",
+    "public/theme-leaves.svg",
+    "public/theme-sparkle.svg"
+  ]
+}
