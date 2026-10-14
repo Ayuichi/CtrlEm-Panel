@@ -42,6 +42,8 @@ The command tabs send one command to everyone you have selected.
 
 A **sequence** is an ordered list of images, videos, sounds, messages, blank screens, reaction tests, and lock input. **Edit** builds the list. **Send** plays a copy of that list, so the next sequence can be built while a send is still going. Press **Play** and the panel sends the copy in order. Leave this page open, and the other person has to leave CtrlEm running. The wait on each step is the pause before the next item. The shortest pause is 3 seconds. A blank screen is still once every 30 seconds for each person. Lock input and blank screen only run on a desktop.
 
+A **reaction test** can include an image. Put that image in **Reward image**, or use **Add reaction test** while an image link is set. They see the image if they pass. If they miss, their input locks. Leave the image empty and only the test runs. A reward image on `u.pone.rs` is copied to Pomf for a marked person, the same way as other files.
+
 **Pomf** on a selected person sends that person a Pomf link instead of a `u.pone.rs` link. The panel downloads that file and uploads it to Pomf the first time, then remembers the link. Other selected people still get the original link. A link that is not on `u.pone.rs`, such as one kept with **Save link** or a Catbox upload, is sent as it is. The sequence list does not change. Use this for someone whose CtrlEm cannot download `u.pone.rs`. If Pomf refuses a file, the panel waits 20 seconds and tries that file once more before sending. A second failure skips that person for that step. A web page, a missing file, or a file over 1 GB is not tried again.
 
 ## Files

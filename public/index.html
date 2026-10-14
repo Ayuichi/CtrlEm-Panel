@@ -100,7 +100,7 @@
     </form>
 
     <h2 class="sub">Sequence</h2>
-    <p class="hint">Images, videos, sounds, messages, blank screens, reaction tests, and lock input, sent in this order. Edit builds the list. Send plays a copy of it, so the next one can be built while a send is still going. Keep this page open. They have to keep CtrlEm running. The wait is the pause before the next item, at least 3 seconds. CtrlEm decides how long each popup stays on screen. A blank screen is still once every 30 seconds per person, so a sooner blank is skipped for that person. Lock input and blank screen are desktop only.</p>
+    <p class="hint">Images, videos, sounds, messages, blank screens, reaction tests, and lock input, sent in this order. Edit builds the list. Send plays a copy of it, so the next one can be built while a send is still going. Keep this page open. They have to keep CtrlEm running. The wait is the pause before the next item, at least 3 seconds. CtrlEm decides how long each popup stays on screen. A reaction test can include an image. They see it if they pass, and their input locks if they miss. A blank screen is still once every 30 seconds per person, so a sooner blank is skipped for that person. Lock input and blank screen are desktop only.</p>
     <div class="tabs seq-tabs" role="tablist">
       <button type="button" class="seq-tab active" data-seq-tab="edit" role="tab" aria-selected="true">Edit</button>
       <button type="button" class="seq-tab" data-seq-tab="send" role="tab" aria-selected="false">Send</button>
@@ -119,7 +119,7 @@
         <button type="button" id="seqAdd">Add current link</button>
         <button type="button" id="seqAddMessage" class="ghost" title="Adds the text in the Message box">Add message</button>
         <button type="button" id="seqAddBlank" class="ghost" title="Desktop only. Once every 30 seconds per person.">Add blank</button>
-        <button type="button" id="seqAddReaction" class="ghost" title="Runs a reaction test. No link.">Add reaction test</button>
+        <button type="button" id="seqAddReaction" class="ghost" title="Runs a reaction test. Uses the image link if one is set. They see it if they pass. If they miss, their input locks.">Add reaction test</button>
         <button type="button" id="seqAddLock" class="ghost" title="Desktop only. Locks the keyboard and mouse.">Add lock input</button>
         <label>Wait <input id="seqWait" type="number" min="3" max="600" value="5"> s</label>
       </div>

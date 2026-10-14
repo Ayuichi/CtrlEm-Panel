@@ -549,7 +549,7 @@ const COMMANDS = {
   writeForMe: { arg: 'text', max: 200, count: true },
   lockinput: {},
   screenBlank: {},
-  reactionTest: {},
+  reactionTest: { arg: 'url', optional: true },
   popupSound: { arg: 'url' },
   videoOverlay: { arg: 'url' },
 };
@@ -563,7 +563,8 @@ function isHttpUrl(value) {
 
 // sequences: [{ id, name, steps, updatedAt }]
 // A file step is { kind: image|video|audio, url, name, wait }.
-// An action step is { kind: message, text, wait } or { kind: blank|reaction|lock, wait }.
+// An action step is { kind: message, text, wait }, { kind: blank|lock, wait },
+// or { kind: reaction, wait } with an optional image url and name.
 let sequences = readJson(SEQUENCES_FILE, []);
 if (!Array.isArray(sequences)) sequences = [];
 const saveSequences = () => writeJson(SEQUENCES_FILE, sequences);
@@ -582,7 +583,13 @@ function cleanSequence(b) {
       if (!text) throw new Error('A message step needs text');
       return { kind, text, wait };
     }
-    if (kind === 'blank' || kind === 'reaction' || kind === 'lock') return { kind, wait };
+    if (kind === 'blank' || kind === 'lock') return { kind, wait };
+    if (kind === 'reaction') {
+      const url = String(s.url || '').trim();
+      if (!url) return { kind, wait };
+      if (!isHttpUrl(url) || url.length > 2000) throw new Error('A reaction test image needs an http or https link');
+      return { kind, url, name: String(s.name || '').trim().slice(0, 80), wait };
+    }
     const url = String(s.url || '').trim();
     if (!isHttpUrl(url) || url.length > 2000) throw new Error('Each file needs an http or https link');
     return { kind, url, name: String(s.name || '').trim().slice(0, 80), wait };
@@ -1024,10 +1031,13 @@ const server = http.createServer(async (req, res) => {
       if (!CODE.test(body.target)) return sendJson(res, 400, { error: 'Bad control code' });
       if (spec.arg) {
         const argument = b.argument == null ? '' : String(b.argument).trim();
-        if (!argument) return sendJson(res, 400, { error: 'This command needs a value' });
-        if (spec.max && argument.length > spec.max) return sendJson(res, 400, { error: 'Text is limited to ' + spec.max + ' characters' });
-        if (spec.arg === 'url' && !isHttpUrl(argument)) return sendJson(res, 400, { error: 'The link needs to start with http:// or https://' });
-        body.argument = argument;
+        if (!argument) {
+          if (!spec.optional) return sendJson(res, 400, { error: 'This command needs a value' });
+        } else {
+          if (spec.max && argument.length > spec.max) return sendJson(res, 400, { error: 'Text is limited to ' + spec.max + ' characters' });
+          if (spec.arg === 'url' && !isHttpUrl(argument)) return sendJson(res, 400, { error: 'The link needs to start with http:// or https://' });
+          body.argument = argument;
+        }
       }
       if (spec.count && b.count != null) body.count = Math.max(1, Math.min(5, Math.round(Number(b.count)) || 1));
       if (b.targetDevice === 'DESKTOP' || b.targetDevice === 'ANDROID') body.targetDevice = b.targetDevice;

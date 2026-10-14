@@ -23,7 +23,7 @@ const COMMANDS = [
   { id: 'openPage', label: 'Open page', url: true, help: 'Opens a URL in their browser.' },
   { id: 'lockinput', label: 'Lock input', desktop: true, help: 'Locks the keyboard and mouse. Desktop only.' },
   { id: 'screenBlank', label: 'Blank screen', desktop: true, help: 'Blanks the monitor. Desktop only, and at most once every 30 seconds per person.' },
-  { id: 'reactionTest', label: 'Reaction test', help: 'Runs a reaction test on their screen. They have to allow it. CtrlEm sets the timer.' },
+  { id: 'reactionTest', label: 'Reaction test', media: 'image', optional: true, help: 'Runs a reaction test. An image here is the reward if they pass. If they miss, their input locks. Leave the image empty and only the test runs. They have to allow it. CtrlEm sets the timer.' },
 ];
 
 const state = {
@@ -518,8 +518,8 @@ function showForm() {
   text.maxLength = cmd.max || 2000;
   if (cmd.max && text.value.length > cmd.max) text.value = text.value.slice(0, cmd.max);
   $('#argTextLabel').textContent = cmd.text || 'Text';
-  $('#argUrlLabel').textContent = cmd.url ? 'Page URL' : cmd.media === 'video' ? 'Video URL' : cmd.media === 'audio' ? 'Audio URL' : 'Image URL';
-  $('#argUrl').placeholder = media ? 'https://… or drop / pick a file' : 'https://…';
+  $('#argUrlLabel').textContent = cmd.id === 'reactionTest' ? 'Reward image' : cmd.url ? 'Page URL' : cmd.media === 'video' ? 'Video URL' : cmd.media === 'audio' ? 'Audio URL' : 'Image URL';
+  $('#argUrl').placeholder = cmd.id === 'reactionTest' ? 'https://… optional. Shown if they pass' : media ? 'https://… or drop / pick a file' : 'https://…';
   $('#filePick').accept = cmd.media === 'image' ? 'image/*' : cmd.media === 'video' ? 'video/*' : cmd.media === 'audio' ? 'audio/*' : '';
   if (media && safeHttp($('#argUrl').value)) showPreview($('#argUrl').value, cmd.media);
   else if (!media) $('#preview').replaceChildren();
@@ -601,12 +601,13 @@ async function onSend(e) {
   e.preventDefault();
   if (state.sending) return;
   const cmd = state.cmd;
-  const argument = cmd.text ? $('#argText').value.trim() : (cmd.media || cmd.url) ? $('#argUrl').value.trim() : '';
-  if ((cmd.text || cmd.media || cmd.url) && !argument) {
+  const wantsLink = !!(cmd.media || cmd.url);
+  const argument = cmd.text ? $('#argText').value.trim() : wantsLink ? $('#argUrl').value.trim() : '';
+  if ((cmd.text || (wantsLink && !cmd.optional)) && !argument) {
     logLine(cmd.text ? 'Write the text first.' : 'Add a link first.', 'bad');
     return;
   }
-  if ((cmd.media || cmd.url) && !safeHttp(argument)) {
+  if (argument && wantsLink && !safeHttp(argument)) {
     logLine('The link needs to start with http:// or https://.', 'bad');
     return;
   }
@@ -1439,7 +1440,7 @@ function stepLabel(kind) {
 function stepCaption(step) {
   if (step.kind === 'message') return step.text || 'Message';
   if (step.kind === 'blank') return 'Blank screen';
-  if (step.kind === 'reaction') return 'Reaction test';
+  if (step.kind === 'reaction') return step.url ? (step.name || nameFromUrl(step.url)) : 'Reaction test';
   if (step.kind === 'lock') return 'Lock input';
   return step.name || nameFromUrl(step.url);
 }
@@ -1519,7 +1520,7 @@ function renderSequence() {
       el('span', { class: 'nm', title: step.url || step.text || '' }, stepCaption(step)),
       el('label', {}, 'Wait ', wait, ' s'),
     ];
-    if (step.url) row.push(btn('Save', 'Save this link in the selected album', () => saveLink(step.url, step.name, step.kind)));
+    if (step.url) row.push(btn('Save', 'Save this link in the selected album', () => saveLink(step.url, step.name, step.kind === 'reaction' ? 'image' : step.kind)));
     row.push(
       btn('↑', 'Move earlier', () => moveStep(i, -1)),
       btn('↓', 'Move later', () => moveStep(i, 1)),
@@ -1576,6 +1577,30 @@ function addMessageStep() {
 }
 function addPlainStep(kind) {
   state.sequence.steps.push({ kind, wait: defaultWait() });
+  setSeqStatus(sequenceSpan(state.sequence.steps));
+  renderSequence();
+}
+function addReactionStep() {
+  const raw = $('#argUrl').value.trim();
+  if (!raw) { addPlainStep('reaction'); return; }
+  const url = safeHttp(raw);
+  if (!url) { setSeqStatus('That link needs to start with http:// or https://.', true); return; }
+  const known = state.library.find(e => e && (e.url === raw || e.url === url));
+  const imageField = state.cmd.id === 'reactionTest' || state.cmd.media === 'image';
+  if (known && known.kind && known.kind !== 'image') {
+    setSeqStatus('A reaction test reward has to be an image.', true);
+    return;
+  }
+  if (!imageField && !(known && known.kind === 'image')) {
+    setSeqStatus('Set an image link first. They see that image if they pass the reaction test.', true);
+    return;
+  }
+  state.sequence.steps.push({
+    kind: 'reaction',
+    url,
+    name: String((known && known.name) || nameFromUrl(url)).slice(0, 80),
+    wait: defaultWait(),
+  });
   setSeqStatus(sequenceSpan(state.sequence.steps));
   renderSequence();
 }
@@ -1959,7 +1984,7 @@ function bind() {
   $('#seqAdd').addEventListener('click', addCurrentLink);
   $('#seqAddMessage').addEventListener('click', addMessageStep);
   $('#seqAddBlank').addEventListener('click', () => addPlainStep('blank'));
-  $('#seqAddReaction').addEventListener('click', () => addPlainStep('reaction'));
+  $('#seqAddReaction').addEventListener('click', addReactionStep);
   $('#seqAddLock').addEventListener('click', () => addPlainStep('lock'));
   $('#saveLink').addEventListener('click', () => saveLink($('#argUrl').value, '', state.cmd.media));
   $('#uploadHost').addEventListener('change', async () => {

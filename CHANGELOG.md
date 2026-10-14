@@ -2,6 +2,12 @@
 
 ## 2026-10-14
 
+### A reaction test can include an image
+
+**Reaction test** takes an image as the reward. Put it in **Reward image** on that tab, or press **Add reaction test** while an image link is set. They see the image if they pass. If they miss, their input locks. Leave the image empty and only the test runs. A reward image on `u.pone.rs` is copied to Pomf for a marked person, the same way as other files.
+
+Close the panel and start it again so this can load, then refresh the page.
+
 ### A frame for each video
 
 A video in the file list shows one frame, kept in the `thumbs` folder with the image previews. A play mark stays on it. Resting on a video does not play it. Click the file to load it in the send preview. An mkv stays a title card, because the browser cannot draw a frame from it.
@@ -20,7 +26,7 @@ Close the panel and start it again so this can load, then refresh the page. A `t
 
 ### Reaction test, and more sequence steps
 
-**Reaction test** is a command tab. It sends no link and no text. The other person has to allow it.
+**Reaction test** is a command tab. The other person has to allow it. An image can go with it, as described above.
 
 A sequence can also include a **message**, a **blank screen**, a **reaction test**, and **lock input**. Add message uses the text in the Message box. Blank screen and lock input are desktop only. A blank screen is still once every 30 seconds per person, and a sooner blank in the same run is skipped for that person.
 
