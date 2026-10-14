@@ -832,12 +832,21 @@ async function loadLibrary() {
   dropStaleThumbs();
   renderLibrary();
 }
-async function loadAlbums() {
-  try { state.albums = await api('/api/albums'); }
-  catch { state.albums = []; }
-  if (state.albumView && !state.albums.some(a => a.id === state.albumView)) state.albumView = '';
+async function loadAlbums(opts = {}) {
+  let loaded = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { loaded = await api('/api/albums'); break; }
+    catch (err) {
+      if (attempt === 0) { await sleep(300); continue; }
+      logLine('Albums: ' + explain(err), 'bad');
+    }
+  }
+  // A failed reload must not wipe a list the page already showed.
+  if (Array.isArray(loaded)) state.albums = loaded;
+  else if (!state.albums.length) state.albums = [];
+  if (state.albumView && !state.albums.some(a => a && a.id === state.albumView)) state.albumView = '';
   renderAlbumSelects();
-  renderLibrary();
+  if (!opts.skipGrid) renderLibrary();
 }
 function renderAlbumSelects() {
   const view = $('#albumView');
@@ -981,7 +990,9 @@ function libraryThumb(entry, safe) {
 function prepareTile(item, entry) {
   if (entry.kind === 'image') bindTileMotion(item);
   if (thumbBlobs.has(entry.hash)) return;
-  if (entry.thumb) { showSavedThumb(entry.hash); return; }
+  // Saved previews wait until the tile is on screen. Fetching every one here
+  // used up the browser's connections to this page and the album request,
+  // which runs after the grid is drawn, never got a turn.
   if (!thumbFailed.has(entry.hash)) getThumbObserver().observe(item);
 }
 function getThumbObserver() {
@@ -2061,10 +2072,16 @@ async function init() {
   try { await loadConfig(); }
   catch { setStatus('Panel server is not responding.', 'bad'); return; }
   if ($('#uploadHost')) $('#uploadHost').value = state.config.uploadHost === 'catbox' ? 'catbox' : 'pone';
-  await loadUsers();
-  await loadLibrary();
-  await loadAlbums();
-  await loadSequences();
+  try { await loadUsers(); }
+  catch (err) { logLine('Users: ' + explain(err), 'bad'); }
+  // Albums before the file grid. Drawing the grid starts preview loads, and
+  // those must not be ahead of this request.
+  try { await loadAlbums({ skipGrid: true }); }
+  catch (err) { logLine('Albums: ' + explain(err), 'bad'); }
+  try { await loadLibrary(); }
+  catch (err) { logLine('Library: ' + explain(err), 'bad'); }
+  try { await loadSequences(); }
+  catch (err) { logLine('Sequences: ' + explain(err), 'bad'); }
   if (!$('#seqStatus').classList.contains('bad')) setSeqStatus(sequenceSpan(state.sequence.steps));
   updateSendButton();
   await pollRate();

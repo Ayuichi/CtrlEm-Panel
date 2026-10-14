@@ -2,6 +2,12 @@
 
 ## 2026-10-14
 
+### Album menus fill when the page opens
+
+The album menus were staying on **All files** and **No album** until a new album was created. They now fill when the page opens. Preview pictures load as each tile comes on screen, so they no longer hold up that list.
+
+Refresh the page. This one does not need the panel to be started again.
+
 ### A reaction test can include an image
 
 **Reaction test** takes an image as the reward. Put it in **Reward image** on that tab, or press **Add reaction test** while an image link is set. They see the image if they pass. If they miss, their input locks. Leave the image empty and only the test runs. A reward image on `u.pone.rs` is copied to Pomf for a marked person, the same way as other files.
