@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-15
+
+### Updates are signed
+
+**Update available** now only installs an update that carries the author's signature, and checks every downloaded file against it. A changed or unsigned file on GitHub is refused and nothing is written. The update also refuses file names that Windows would read as your personal files, such as `Config.json`. Other websites can no longer show the panel inside a frame.
+
+A copy older than this one cannot check signatures yet, so this update is the last one it installs without that check. Every later update is checked.
+
+Close the panel and start it again so this can load, then refresh the page.
+
+### Uploads are public
+
+The README now says it plainly: files uploaded to pone.rs, Catbox, or Pomf can be opened by anyone with the link and cannot be deleted from the panel.
+
+### The sequence list shows preview pictures
+
+Each image or video in **Edit** and **Send** shows its saved preview beside the name. A reaction test with a reward image does the same. A sound, a message, a blank screen, or lock input stays a small mark. A file that has no preview yet keeps that mark until the file list has made one.
+
+Refresh the page. This does not need the panel to be started again.
+
 ## 2026-10-14
 
 ### Album menus fill when the page opens

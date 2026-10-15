@@ -1000,7 +1000,13 @@ function getThumbObserver() {
   thumbObserver = new IntersectionObserver(entries => {
     for (const seen of entries) {
       if (!seen.isIntersecting) continue;
-      enqueueThumb(seen.target.dataset.hash);
+      const hash = seen.target.dataset.hash;
+      if (seen.target.classList.contains('seq-still')) {
+        thumbObserver.unobserve(seen.target);
+        if (hash && !thumbBlobs.has(hash)) showSavedThumb(hash);
+        continue;
+      }
+      enqueueThumb(hash);
     }
   }, { root: null, rootMargin: '240px 0px', threshold: 0.01 });
   return thumbObserver;
@@ -1076,20 +1082,30 @@ async function showSavedThumb(hash) {
     if (tile && !thumbFailed.has(hash)) getThumbObserver().observe(tile);
   }
 }
+function paintStillInto(node, entry, url, opts) {
+  if (!node || !url) return;
+  let still = node.querySelector(':scope > img.still');
+  if (!still) {
+    still = el('img', { class: 'still', src: url, alt: '', decoding: 'async' });
+    if (!opts || !opts.quiet) {
+      if (!entry || entry.kind !== 'video') still.title = 'Rest here to play it';
+    }
+    const hold = node.querySelector(':scope > .kind');
+    if (hold) hold.replaceWith(still);
+    else node.prepend(still);
+  } else if (still.getAttribute('src') !== url) still.src = url;
+  if (entry && entry.kind === 'video' && !node.querySelector(':scope > .mark')) still.after(playMark());
+}
 function paintThumb(hash) {
   const url = thumbBlobs.get(hash);
-  const tile = tileByHash(hash);
-  if (!url || !tile) return;
+  if (!url || !/^[a-f0-9]{64}$/.test(hash || '')) return;
   const entry = state.library.find(item => item && item.hash === hash);
-  let still = tile.querySelector('img.still');
-  if (!still) {
-    still = stillImage(url, entry && entry.kind);
-    const hold = tile.querySelector('.kind');
-    if (hold) hold.replaceWith(still);
-    else tile.prepend(still);
-  } else if (still.getAttribute('src') !== url) still.src = url;
-  if (entry && entry.kind === 'video' && !tile.querySelector('.mark')) still.after(playMark());
-  if (tile.dataset.wantLive === '1' && tile.matches(':hover')) startTileMotion(tile);
+  const tile = tileByHash(hash);
+  if (tile) {
+    paintStillInto(tile, entry, url);
+    if (tile.dataset.wantLive === '1' && tile.matches(':hover')) startTileMotion(tile);
+  }
+  document.querySelectorAll('.seq-still[data-hash="' + hash + '"]').forEach(node => paintStillInto(node, entry, url, { quiet: true }));
 }
 function frameBlob(source, sw, sh) {
   const canvas = document.createElement('canvas');
@@ -1432,6 +1448,7 @@ function showSeqTab(which) {
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
   });
+  requestAnimationFrame(() => pumpVisibleSeqStills());
 }
 function commandForKind(kind) {
   const id = kind === 'image' ? 'popupImage'
@@ -1476,6 +1493,66 @@ function updateSeqButtons() {
     } else tab.textContent = 'Send';
   }
 }
+function libraryEntryForUrl(url) {
+  const raw = String(url || '');
+  const safe = safeHttp(raw);
+  if (!raw) return null;
+  return state.library.find(entry => {
+    if (!entry || !entry.url) return false;
+    if (entry.url === raw || entry.url === safe) return true;
+    return !!(safe && safeHttp(entry.url) === safe);
+  }) || null;
+}
+function stepMark(step) {
+  if (step.kind === 'video') return '▶';
+  if (step.kind === 'audio') return '♪';
+  if (step.kind === 'message') return 'Aa';
+  if (step.kind === 'blank') return '□';
+  if (step.kind === 'reaction') return 'Rt';
+  if (step.kind === 'lock') return 'Lk';
+  return '•';
+}
+function seqStill(step) {
+  const entry = step && step.url ? libraryEntryForUrl(step.url) : null;
+  const preview = !!(entry && canPreview(entry, safeHttp(entry.url)));
+  const slot = el('span', { class: 'seq-still', 'aria-hidden': 'true' });
+  if (preview && /^[a-f0-9]{64}$/.test(entry.hash || '')) slot.dataset.hash = entry.hash;
+  const url = preview ? thumbBlobs.get(entry.hash) : '';
+  if (url) paintStillInto(slot, entry, url, { quiet: true });
+  else slot.append(el('span', { class: 'kind' }, stepMark(step || {})));
+  return slot;
+}
+function forgetSeqStills(list) {
+  if (!thumbObserver || !list) return;
+  list.querySelectorAll('.seq-still').forEach(node => thumbObserver.unobserve(node));
+}
+function watchSeqStills(list) {
+  if (!list) return;
+  list.querySelectorAll('.seq-still[data-hash]').forEach(slot => {
+    const hash = slot.dataset.hash;
+    if (!hash || thumbBlobs.has(hash) || thumbFailed.has(hash)) return;
+    const entry = state.library.find(item => item && item.hash === hash);
+    if (!entry || !entry.thumb) return;
+    getThumbObserver().observe(slot);
+  });
+  pumpVisibleSeqStills();
+}
+function pumpVisibleSeqStills() {
+  const list = state.seqView === 'send' ? $('#seqRun') : $('#seqSteps');
+  if (!list || list.classList.contains('hidden') || (list.parentElement && list.parentElement.classList.contains('hidden'))) return;
+  const bound = list.getBoundingClientRect();
+  if (bound.width <= 0 || bound.height <= 0) return;
+  list.querySelectorAll('.seq-still[data-hash]').forEach(slot => {
+    const hash = slot.dataset.hash;
+    if (!hash || thumbBlobs.has(hash) || thumbFailed.has(hash)) return;
+    const entry = state.library.find(item => item && item.hash === hash);
+    if (!entry || !entry.thumb) return;
+    const box = slot.getBoundingClientRect();
+    const nearList = box.bottom > bound.top - 240 && box.top < bound.bottom + 240;
+    const onScreen = box.bottom > 0 && box.top < window.innerHeight;
+    if (nearList && onScreen) showSavedThumb(hash);
+  });
+}
 function renderRun() {
   const list = $('#seqRun');
   if (!list) return;
@@ -1488,14 +1565,17 @@ function renderRun() {
       ? 'Play sends the sequence open in Edit, copied at that moment.'
       : 'Nothing to send yet. Add items in Edit.';
   }
+  forgetSeqStills(list);
   list.replaceChildren();
   if (!steps.length) list.append(el('li', { class: 'empty' }, 'Nothing here yet. Add items in Edit.'));
   steps.forEach((step, i) => {
     list.append(el('li', { class: 'seq-step' + (live && state.seqIndex === i ? ' playing' : '') },
+      seqStill(step),
       el('span', { class: 'k' }, stepLabel(step.kind)),
       el('span', { class: 'nm', title: step.url || step.text || '' }, stepCaption(step)),
       el('span', { class: 'wait' }, Math.max(3, Number(step.wait) || 3) + 's')));
   });
+  watchSeqStills(list);
   const current = list.querySelector('.playing');
   if (current) current.scrollIntoView({ block: 'nearest' });
   updateSeqButtons();
@@ -1514,6 +1594,7 @@ function renderSequence() {
   const name = $('#seqName');
   if (name && document.activeElement !== name) name.value = state.sequence.name;
   renderSeqPick();
+  forgetSeqStills(list);
   list.replaceChildren();
   if (!state.sequence.steps.length) list.append(el('li', { class: 'empty' }, 'Nothing here yet. Add a link, a message, a blank, a reaction test, or a lock, or use + on an uploaded file.'));
   state.sequence.steps.forEach((step, i) => {
@@ -1527,6 +1608,7 @@ function renderSequence() {
     });
     const btn = (label, title, fn) => el('button', { type: 'button', title, onclick: fn }, label);
     const row = [
+      seqStill(step),
       el('span', { class: 'k' }, stepLabel(step.kind)),
       el('span', { class: 'nm', title: step.url || step.text || '' }, stepCaption(step)),
       el('label', {}, 'Wait ', wait, ' s'),
@@ -1539,6 +1621,7 @@ function renderSequence() {
     );
     list.append(el('li', { class: 'seq-step' }, row));
   });
+  watchSeqStills(list);
   updateSeqButtons();
   if (!state.playing) renderRun();
 }

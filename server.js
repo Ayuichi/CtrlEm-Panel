@@ -793,7 +793,14 @@ function serveStatic(res, pathname) {
   if (!file.startsWith(PUB + path.sep)) return sendJson(res, 403, { error: 'Forbidden' });
   fs.readFile(file, (err, data) => {
     if (err) return sendJson(res, 404, { error: 'Not found' });
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    // Another site must not show the panel in a frame and steer clicks onto its buttons.
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      'Cache-Control': 'no-store',
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': "frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    });
     res.end(data);
   });
 }
@@ -813,9 +820,16 @@ const allowedHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 // A newer build.json version on GitHub main is an update. Personal files are never in that list.
 const UPDATE_REPO = 'Ayuichi/CtrlEm-Panel';
 const UPDATE_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com', 'codeload.github.com']);
-const UPDATE_BAN = new Set(['config.json', 'library.json', 'albums.json', 'sequences.json', 'pomf-mirrors.json', 'AGENTS.md', 'Agents.md']);
+// Lower case. Windows file names ignore case, so Config.json is config.json.
+const UPDATE_BAN = new Set(['config.json', 'library.json', 'albums.json', 'sequences.json', 'pomf-mirrors.json', 'agents.md']);
 const UPDATE_EXT = new Set(['.js', '.md', '.css', '.html', '.svg', '.bat', '.json']);
 const UPDATE_MAX = 2 * 1024 * 1024;
+// build.json on GitHub has to carry a signature from this key, made by tools/sign-build.js.
+// Anyone who can push to the repo still cannot ship program files without the private key.
+const UPDATE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEARP+MwmbbfhQiNY2/oPdfeozJxxv7yIykz6b3yS/4kBs=
+-----END PUBLIC KEY-----
+`;
 let updateBusy = false;
 
 function updateUrlOk(value) {
@@ -826,11 +840,12 @@ function updateUrlOk(value) {
 }
 function updatePathOk(rel) {
   if (typeof rel !== 'string' || !rel || rel.length > 200) return false;
-  if (rel.includes('\\') || rel.startsWith('/') || rel.includes('\0')) return false;
-  const parts = rel.split('/');
-  if (parts.some(part => !part || part === '.' || part === '..')) return false;
-  if (UPDATE_BAN.has(rel) || UPDATE_BAN.has(parts[parts.length - 1])) return false;
-  if (parts[0] === 'thumbs' || parts[0] === '.git' || rel.startsWith('alternative programs')) return false;
+  if (rel.includes('\\') || rel.startsWith('/') || /[\u0000-\u001f:*?"<>|]/.test(rel)) return false;
+  const parts = rel.toLowerCase().split('/');
+  // Windows drops a trailing dot or space, so "config.json." would open config.json.
+  if (parts.some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part))) return false;
+  if (UPDATE_BAN.has(parts[parts.length - 1])) return false;
+  if (parts[0] === 'thumbs' || parts[0] === '.git' || parts[0].startsWith('alternative programs')) return false;
   const base = parts[parts.length - 1];
   if (base !== '.gitignore' && !UPDATE_EXT.has(path.extname(base).toLowerCase())) return false;
   const full = path.resolve(ROOT, rel);
@@ -873,17 +888,41 @@ function githubRaw(rel) {
   const encoded = rel.split('/').map(encodeURIComponent).join('/');
   return 'https://api.github.com/repos/' + UPDATE_REPO + '/contents/' + encoded + '?ref=main';
 }
+// The signed text: version, then one "sha256 path" line per program file. build.json is not hashed.
+function buildMessage(version, files, hashes) {
+  const lines = ['ctrlem-panel-build', String(version)];
+  for (const rel of files) if (rel !== 'build.json') lines.push(hashes[rel] + ' ' + rel);
+  return lines.join('\n');
+}
+function verifyBuild(data) {
+  const hashes = data && data.hashes;
+  const ok = hashes && typeof hashes === 'object' && typeof data.signature === 'string' &&
+    data.files.every(rel => rel === 'build.json' || /^[a-f0-9]{64}$/.test(hashes[rel] || '')) &&
+    (() => {
+      try {
+        return crypto.verify(null, Buffer.from(buildMessage(data.version, data.files, hashes)),
+          UPDATE_PUBLIC_KEY, Buffer.from(data.signature, 'base64'));
+      } catch { return false; }
+    })();
+  if (!ok) {
+    const err = new Error('The update is not signed by the panel author.');
+    err.status = 502;
+    throw err;
+  }
+}
 function parseBuild(buf) {
   let data;
   try { data = JSON.parse(buf.toString('utf8')); } catch { data = null; }
   const version = data && data.version;
   const files = data && Array.isArray(data.files) ? data.files.filter(item => typeof item === 'string') : null;
-  if (!Number.isInteger(version) || version < 1 || version > 1000000 || !files || files.length < 1 || files.length > 40) {
+  if (!Number.isInteger(version) || version < 1 || version > 1000000 || !files || files.length < 1 || files.length > 40 ||
+      files.length !== data.files.length) {
     const err = new Error('The update list is not usable.');
     err.status = 502;
     throw err;
   }
-  return { version, files };
+  verifyBuild({ version, files, hashes: data.hashes, signature: data.signature });
+  return { version, files, hashes: data.hashes, raw: buf };
 }
 function localVersion() {
   const data = readJson(path.join(ROOT, 'build.json'), {});
@@ -917,7 +956,10 @@ async function updateStatus() {
     const remote = await remoteBuild();
     const update = remote.version > localVersion();
     return { update, version: remote.version, dirty: update ? programEdits() : false };
-  } catch { return { update: false }; }
+  } catch (err) {
+    if (err && /not signed/.test(err.message)) console.warn('Update on GitHub ignored: ' + err.message);
+    return { update: false };
+  }
 }
 function replaceFile(dest, buf) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -953,6 +995,8 @@ async function applyUpdate() {
   const got = [];
   let total = 0;
   for (const rel of files) {
+    // The signed list was checked once. Fetching build.json again could return a different one.
+    if (rel === 'build.json') { got.push({ rel, buf: remote.raw }); continue; }
     const buf = await httpsGet(githubRaw(rel), {
       'User-Agent': 'CtrlEmPanel/1.0',
       Accept: 'application/vnd.github.raw',
@@ -966,6 +1010,11 @@ async function applyUpdate() {
     if (total > 8 * 1024 * 1024) {
       const err = new Error('That update is too large.');
       err.status = 413;
+      throw err;
+    }
+    if (crypto.createHash('sha256').update(buf).digest('hex') !== remote.hashes[rel]) {
+      const err = new Error(rel + ' on GitHub does not match the signed update. Nothing was changed.');
+      err.status = 502;
       throw err;
     }
     got.push({ rel, buf });
@@ -1216,4 +1265,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { updatePathOk, parseBuild, previewRange, previewTicketOk, issuePreviewTicket, pipeRemote };
+module.exports = { updatePathOk, parseBuild, buildMessage, verifyBuild, previewRange, previewTicketOk, issuePreviewTicket, pipeRemote };
