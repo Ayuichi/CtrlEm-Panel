@@ -2,6 +2,16 @@
 
 ## 2026-10-16
 
+### A large file list is quicker
+
+The file list shows the first 200 files. **Show more** adds the next 200. Renaming, deleting, or taking a file out of an album changes only that tile instead of drawing the whole list again. **Add all** still adds every file in the current view, not only the ones shown.
+
+The panel remembers which files have a preview picture, so the list loads faster. Saves wait about a second and are written together. Closing the panel window still writes anything that was waiting.
+
+While the panel's tab is hidden, the page stops refreshing the user list and the command counter. Both catch up when you come back. A sequence keeps sending as before.
+
+Close the panel and start it again so this can load, then refresh the page.
+
 ### Sequences are easier to edit
 
 A message or a write can be corrected in its row. Click a step and the next one is added after it. Click the empty part of the list to add at the end again. Drag a step by the row itself. The row stays where it is, a faint copy follows the pointer, and the step moves when you let go. The wait and the move buttons stay on one line at the right of the row. **Add write** and **Add open page** sit with the other sequence buttons.

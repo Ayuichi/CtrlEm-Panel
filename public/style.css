@@ -230,6 +230,7 @@ body.seq-dragging, body.seq-dragging #seqSteps .seq-step, body.seq-dragging #seq
 .album-bar > input { flex: 1; min-width: 90px; }
 .album-bar > select { max-width: 140px; }
 .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.lib-grid .lib-more { grid-column: 1 / -1; justify-self: center; }
 .lib-item { position: relative; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--tile-radius); overflow: hidden; cursor: pointer; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; }
 .lib-item:hover { border-color: var(--accent); }
 .lib-item img, .lib-item video { width: 100%; height: 100%; object-fit: cover; }

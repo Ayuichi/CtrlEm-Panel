@@ -41,6 +41,33 @@ function writeJson(file, data) {
   fs.renameSync(file + '.tmp', file);
 }
 
+// Saves wait a second, so a burst of changes (a Pomf copy of 40 files, several renames)
+// is one write per file instead of one per change. Each entry reads its data when it is
+// written, because albums and sequences are replaced, not only changed.
+// flushSaves() runs on exit, so closing the panel window still writes what was waiting.
+const SAVE_DELAY_MS = 1000;
+const pendingSaves = new Map(); // file -> () => data
+let saveTimer = null;
+function saveSoon(file, read) {
+  pendingSaves.set(file, read);
+  if (!saveTimer) saveTimer = setTimeout(flushSaves, SAVE_DELAY_MS);
+}
+function flushSaves() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const due = [...pendingSaves];
+  pendingSaves.clear();
+  for (const [file, read] of due) {
+    try { writeJson(file, read()); }
+    catch (err) {
+      console.error('Could not save ' + path.basename(file) + ': ' + err.message);
+      if (!pendingSaves.has(file)) pendingSaves.set(file, read);
+    }
+  }
+  if (pendingSaves.size && !saveTimer) saveTimer = setTimeout(flushSaves, 5000);
+}
+process.on('exit', flushSaves);
+
 const config = Object.assign({ apiKey: '', expiry: '24h', favorites: [], rateLimit: 20, uploadHost: 'pone', pomfCodes: [] }, readJson(CONFIG_FILE, {}));
 if (!Array.isArray(config.pomfCodes)) config.pomfCodes = [];
 const saveConfig = () => writeJson(CONFIG_FILE, config);
@@ -52,7 +79,7 @@ function pruneLibrary() {
   for (const [h, e] of Object.entries(library)) if (typeof e.expiresAt === 'number' && e.expiresAt <= now) delete library[h];
 }
 pruneLibrary();
-const saveLibrary = () => writeJson(LIBRARY_FILE, library);
+const saveLibrary = () => saveSoon(LIBRARY_FILE, () => library);
 
 function kindOf(type, name) {
   if (/^image\//.test(type)) return 'image';
@@ -75,7 +102,7 @@ function publicJob(j) {
 
 let albums = readJson(ALBUMS_FILE, []);
 if (!Array.isArray(albums)) albums = [];
-const saveAlbums = () => writeJson(ALBUMS_FILE, albums);
+const saveAlbums = () => saveSoon(ALBUMS_FILE, () => albums);
 function publicAlbums() {
   return albums.map(a => ({ id: a.id, name: a.name, hashes: a.hashes || [], count: (a.hashes || []).length }));
 }
@@ -107,15 +134,20 @@ const THUMB_RANGE_MAX = 8 * 1024 * 1024;
 const PREVIEW_TICKET_MS = 5 * 60 * 1000;
 fs.mkdirSync(THUMBS_DIR, { recursive: true });
 const previewTickets = new Map();
+// Hashes that have a saved still. The folder is read once at start, then this set changes
+// with each save and delete. Asking the disk once per file made every library request
+// cost one file check per entry (about 75 ms at 1500 files).
+const thumbHashes = new Set();
 
 function thumbFile(hash) {
   return path.join(THUMBS_DIR, hash + '.jpg');
 }
 function thumbReady(hash) {
-  try { return fs.statSync(thumbFile(hash)).size > 0; } catch { return false; }
+  return thumbHashes.has(hash);
 }
 function removeThumb(hash) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return;
+  thumbHashes.delete(hash);
   fs.rm(thumbFile(hash), { force: true }, () => {});
 }
 function sweepThumbs() {
@@ -123,7 +155,9 @@ function sweepThumbs() {
   try { names = fs.readdirSync(THUMBS_DIR); } catch { return; }
   for (const name of names) {
     const found = /^([a-f0-9]{64})\.jpg$/.exec(name);
-    if (found && !library[found[1]]) fs.rm(path.join(THUMBS_DIR, name), { force: true }, () => {});
+    if (!found) continue;
+    if (library[found[1]]) thumbHashes.add(found[1]);
+    else fs.rm(path.join(THUMBS_DIR, name), { force: true }, () => {});
   }
 }
 function libraryView(entry) {
@@ -274,7 +308,7 @@ async function uploadToHost(hostId, file, name, type, job) {
 // pomf-mirrors.json: source URL -> Pomf URL. Library entries also keep pomfUrl when the source matches.
 let pomfMirrors = readJson(MIRRORS_FILE, {});
 if (!pomfMirrors || typeof pomfMirrors !== 'object' || Array.isArray(pomfMirrors)) pomfMirrors = {};
-const saveMirrors = () => writeJson(MIRRORS_FILE, pomfMirrors);
+const saveMirrors = () => saveSoon(MIRRORS_FILE, () => pomfMirrors);
 
 function linkHost(value) {
   try {
@@ -567,7 +601,7 @@ function isHttpUrl(value) {
 // { kind: blank|lock, wait }, or { kind: reaction, wait } with an optional image url and name.
 let sequences = readJson(SEQUENCES_FILE, []);
 if (!Array.isArray(sequences)) sequences = [];
-const saveSequences = () => writeJson(SEQUENCES_FILE, sequences);
+const saveSequences = () => saveSoon(SEQUENCES_FILE, () => sequences);
 
 function cleanSequence(b) {
   const id = typeof b.id === 'string' && /^[a-f0-9]{8,32}$/.test(b.id) ? b.id : crypto.randomBytes(8).toString('hex');
@@ -1152,7 +1186,13 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = p.match(/^\/api\/library\/([a-f0-9]{64})\/thumb$/)) && req.method === 'GET') {
       if (!library[m[1]] || !thumbReady(m[1])) return sendJson(res, 404, { error: 'No preview yet' });
-      const data = fs.readFileSync(thumbFile(m[1]));
+      let data;
+      try { data = fs.readFileSync(thumbFile(m[1])); }
+      catch {
+        // Removed outside the panel. Forget it so the page makes a new one.
+        thumbHashes.delete(m[1]);
+        return sendJson(res, 404, { error: 'No preview yet' });
+      }
       res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
       res.end(data);
       return;
@@ -1172,6 +1212,7 @@ const server = http.createServer(async (req, res) => {
       fs.writeFileSync(tmp, buf);
       fs.rmSync(dest, { force: true });
       fs.renameSync(tmp, dest);
+      thumbHashes.add(m[1]);
       return sendJson(res, 200, { ok: true });
     }
     if ((m = p.match(/^\/api\/library\/([a-f0-9]{64})\/ticket$/)) && req.method === 'POST') {
@@ -1264,6 +1305,9 @@ if (require.main === module) {
     console.error(err);
     process.exit(1);
   });
+  // Ctrl+C, and closing the console window (SIGHUP on Windows), end through exit, so the
+  // 'exit' handler writes any save that was still waiting.
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, () => process.exit(0));
   server.listen(PORT, HOST, () => {
     const link = `http://127.0.0.1:${PORT}/`;
     console.log(`CtrlEm Panel running at ${link}  (Ctrl+C to stop)`);

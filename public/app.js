@@ -223,6 +223,15 @@ async function pollRate() {
   } catch { /* the next action shows that the server is gone */ }
 }
 
+// The 20 second user refresh, skipped while hidden or sending. Switching tabs back and forth
+// does not ask CtrlEm again within 15 seconds, so it stays well under the read limit.
+let usersCheckedAt = 0;
+function refreshUsersQuiet() {
+  if (document.hidden || state.sending) return;
+  if (Date.now() - usersCheckedAt < 15000) return;
+  usersCheckedAt = Date.now();
+  loadUsers(true);
+}
 async function loadUsers(quiet) {
   if (!state.config || !state.config.hasKey) { setStatus('No API key. Open Settings.', 'bad'); renderUsers(); return; }
   if (state.loadingUsers) return;
@@ -880,9 +889,45 @@ function visibleFiles() {
   }
   return items.filter(e => !filter || e.kind === filter);
 }
+// The grid builds the first LIB_PAGE tiles. Show more adds the next batch to the tiles
+// already there. A rename or a removal changes only that tile. Building every tile again
+// for one change was the slow part with 1500 files. Add all still uses every visible file.
+const LIB_PAGE = 200;
+let libShown = LIB_PAGE;
+function resetLibraryPage() {
+  libShown = LIB_PAGE;
+}
+function libraryTile(entry, album) {
+  const safe = safeHttp(entry.url);
+  const thumb = libraryThumb(entry, safe);
+  const addBtn = (entry.kind === 'image' || entry.kind === 'video' || entry.kind === 'audio')
+    ? el('button', { class: 'add', type: 'button', title: 'Add to sequence', onclick: ev => { ev.stopPropagation(); addLibraryStep(entry); } }, '+')
+    : null;
+  const remove = album
+    ? el('button', { class: 'del', type: 'button', title: 'Remove from this album', onclick: ev => { ev.stopPropagation(); removeFromAlbum(album.id, entry.hash); } }, '×')
+    : el('button', { class: 'del', type: 'button', title: 'Remove from this list', onclick: ev => { ev.stopPropagation(); removeLibrary(entry); } }, '×');
+  const editing = naming && naming.hash === entry.hash;
+  const cap = editing ? renameField(entry) : el('button', {
+    class: 'cap',
+    type: 'button',
+    title: entry.name || '',
+    'aria-label': 'Rename ' + (entry.name || 'file'),
+    onclick: ev => { ev.stopPropagation(); beginRename(entry); },
+  }, el('span', { class: 'cap-name' }, entry.name || ''), el('span', { class: 'cap-edit', 'aria-hidden': 'true' }, '✎'));
+  const item = el('div', {
+    class: 'lib-item',
+    'data-hash': entry.hash,
+    title: entry.name || '',
+    onclick: ev => { if (ev.target.closest('button, input')) return; useLibrary(entry); },
+  }, thumb, cap, addBtn, remove);
+  if (canPreview(entry, safe)) prepareTile(item, entry);
+  return item;
+}
+function forgetTile(tile) {
+  if (thumbObserver) thumbObserver.unobserve(tile);
+}
 function renderLibrary() {
   libraryDraw = true;
-  let focus = null;
   try {
     const album = state.albums.find(a => a.id === state.albumView);
     const hint = $('#libHint');
@@ -891,39 +936,65 @@ function renderLibrary() {
       : 'Click a file to use it once. Click its name to rename it. + adds it to the sequence. The same file again reuses its saved link. Images and videos stay still. Rest on a picture to play it.';
     const items = visibleFiles();
     if (naming && !items.some(entry => entry.hash === naming.hash)) naming = null;
-    const grid = $('#libGrid'); grid.replaceChildren();
+    const grid = $('#libGrid');
+    grid.querySelectorAll('.lib-item').forEach(forgetTile);
+    grid.replaceChildren();
     if (!items.length) { grid.append(el('p', { class: 'hint' }, album ? 'Nothing in this album yet.' : 'Nothing here yet.')); return; }
-    for (const entry of items) {
-      const safe = safeHttp(entry.url);
-      const thumb = libraryThumb(entry, safe);
-      const addBtn = (entry.kind === 'image' || entry.kind === 'video' || entry.kind === 'audio')
-        ? el('button', { class: 'add', type: 'button', title: 'Add to sequence', onclick: ev => { ev.stopPropagation(); addLibraryStep(entry); } }, '+')
-        : null;
-      const remove = album
-        ? el('button', { class: 'del', type: 'button', title: 'Remove from this album', onclick: ev => { ev.stopPropagation(); removeFromAlbum(album.id, entry.hash); } }, '×')
-        : el('button', { class: 'del', type: 'button', title: 'Remove from this list', onclick: ev => { ev.stopPropagation(); removeLibrary(entry); } }, '×');
-      const editing = naming && naming.hash === entry.hash;
-      const cap = editing ? renameField(entry) : el('button', {
-        class: 'cap',
-        type: 'button',
-        title: entry.name || '',
-        'aria-label': 'Rename ' + (entry.name || 'file'),
-        onclick: ev => { ev.stopPropagation(); beginRename(entry); },
-      }, el('span', { class: 'cap-name' }, entry.name || ''), el('span', { class: 'cap-edit', 'aria-hidden': 'true' }, '✎'));
-      const item = el('div', {
-        class: 'lib-item',
-        'data-hash': entry.hash,
-        title: entry.name || '',
-        onclick: ev => { if (ev.target.closest('button, input')) return; useLibrary(entry); },
-      }, thumb, cap, addBtn, remove);
-      grid.append(item);
-      if (canPreview(entry, safe)) prepareTile(item, entry);
-    }
-    focus = naming ? grid.querySelector('input.cap') : null;
+    const frag = document.createDocumentFragment();
+    for (const entry of items.slice(0, libShown)) frag.append(libraryTile(entry, album));
+    grid.append(frag);
+    paintLibraryMore(grid, items.length);
   } finally {
     libraryDraw = false;
   }
-  if (!focus || !naming) return;
+  focusRename();
+}
+function paintLibraryMore(grid, total) {
+  const old = grid.querySelector('.lib-more');
+  if (old) old.remove();
+  const shown = grid.querySelectorAll('.lib-item').length;
+  if (shown >= total) return;
+  const left = total - shown;
+  grid.append(el('button', { class: 'ghost lib-more', type: 'button', onclick: showMoreFiles },
+    'Show ' + Math.min(LIB_PAGE, left) + ' more (' + left + ' left)'));
+}
+function showMoreFiles() {
+  const grid = $('#libGrid');
+  const album = state.albums.find(a => a.id === state.albumView);
+  const items = visibleFiles();
+  const from = grid.querySelectorAll('.lib-item').length;
+  libShown = from + LIB_PAGE;
+  const frag = document.createDocumentFragment();
+  for (const entry of items.slice(from, libShown)) frag.append(libraryTile(entry, album));
+  const more = grid.querySelector('.lib-more');
+  if (more) more.before(frag); else grid.append(frag);
+  paintLibraryMore(grid, items.length);
+}
+// Swaps one tile for a fresh copy. Returns false when that file is not on screen.
+function redrawTile(entry) {
+  const old = entry && tileByHash(entry.hash);
+  if (!old) return false;
+  const album = state.albums.find(a => a.id === state.albumView);
+  libraryDraw = true;
+  try {
+    forgetTile(old);
+    old.replaceWith(libraryTile(entry, album));
+  } finally {
+    libraryDraw = false;
+  }
+  return true;
+}
+function dropTile(hash) {
+  const grid = $('#libGrid');
+  const tile = tileByHash(hash);
+  if (tile) { forgetTile(tile); tile.remove(); }
+  if (!grid.querySelector('.lib-item')) { renderLibrary(); return; }
+  paintLibraryMore(grid, visibleFiles().length);
+}
+function focusRename() {
+  if (!naming) return;
+  const focus = $('#libGrid').querySelector('input.cap');
+  if (!focus) return;
   focus.focus();
   if (naming.pick) { focus.select(); naming.pick = false; }
   else {
@@ -1263,8 +1334,16 @@ function stopTileMotion(tile) {
 
 function beginRename(entry) {
   if (!entry || (naming && naming.hash === entry.hash)) return;
+  const prev = naming ? state.library.find(item => item && item.hash === naming.hash) : null;
   naming = { hash: entry.hash, value: entry.name || '', pick: true, caret: 0 };
-  renderLibrary();
+  // Put the file that was being renamed back to a plain name, then open this one.
+  if (prev) redrawTile(prev);
+  if (!redrawTile(entry)) renderLibrary();
+  focusRename();
+}
+function closeRenameTile(entry) {
+  if (!redrawTile(entry)) renderLibrary();
+  focusRename();
 }
 function renameField(entry) {
   const input = el('input', {
@@ -1290,7 +1369,7 @@ function renameField(entry) {
     input.dataset.skip = '1';
     if (ev.key === 'Escape') {
       if (naming && naming.hash === entry.hash) naming = null;
-      renderLibrary();
+      closeRenameTile(entry);
       return;
     }
     finishRename(entry, input.value);
@@ -1326,7 +1405,7 @@ async function finishRename(entry, raw, before) {
     if (!(naming && naming.hash === entry.hash)) return;
     if (!name && previous) logLine('Library: Name the file.', 'bad');
     naming = null;
-    renderLibrary();
+    closeRenameTile(entry);
     return;
   }
   renameFlight.add(entry.hash);
@@ -1344,11 +1423,11 @@ async function finishRename(entry, raw, before) {
   if (naming && naming.hash !== entry.hash) { paintLibraryName(entry); return; }
   if (failed && naming && naming.hash === entry.hash) {
     naming.value = String(raw || '');
-    renderLibrary();
+    closeRenameTile(entry);
     return;
   }
   if (naming && naming.hash === entry.hash) naming = null;
-  renderLibrary();
+  closeRenameTile(entry);
 }
 async function createAlbum() {
   const name = $('#albumName').value.trim();
@@ -1356,6 +1435,7 @@ async function createAlbum() {
   try {
     const album = await api('/api/albums', { method: 'POST', body: { name } });
     $('#albumName').value = '';
+    resetLibraryPage();
     state.albumView = album.id;
     await loadAlbums();
     if ($('#uploadAlbum')) $('#uploadAlbum').value = album.id;
@@ -1365,6 +1445,7 @@ async function deleteAlbum() {
   if (!state.albumView) return;
   try {
     await api('/api/albums/' + state.albumView, { method: 'DELETE' });
+    resetLibraryPage();
     state.albumView = '';
     await loadAlbums();
   } catch (err) { logLine('Album: ' + explain(err), 'bad'); }
@@ -1395,7 +1476,9 @@ function addVisibleToSequence() {
 async function removeFromAlbum(albumId, hash) {
   try {
     await api('/api/albums/' + albumId + '/files/' + hash, { method: 'DELETE' });
-    await loadAlbums();
+    const album = state.albums.find(a => a.id === albumId);
+    if (album && Array.isArray(album.hashes)) album.hashes = album.hashes.filter(h => h !== hash);
+    if (state.albumView === albumId) dropTile(hash);
   } catch (err) { logLine('Album: ' + explain(err), 'bad'); }
 }
 function useLibrary(entry) {
@@ -1410,7 +1493,14 @@ function useLibrary(entry) {
 async function removeLibrary(entry) {
   try {
     await api('/api/library/' + entry.hash, { method: 'DELETE' });
-    await loadLibrary();
+    // The server also took it out of every album. Mirror that here instead of reloading all files.
+    state.library = state.library.filter(item => item && item.hash !== entry.hash);
+    for (const album of state.albums) {
+      if (Array.isArray(album.hashes)) album.hashes = album.hashes.filter(h => h !== entry.hash);
+    }
+    if (naming && naming.hash === entry.hash) naming = null;
+    dropStaleThumbs();
+    dropTile(entry.hash);
   } catch (err) { logLine('Library: ' + explain(err), 'bad'); }
 }
 
@@ -2253,8 +2343,9 @@ function bind() {
   });
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', e => e.preventDefault());
-  $('#libFilter').addEventListener('change', renderLibrary);
+  $('#libFilter').addEventListener('change', () => { resetLibraryPage(); renderLibrary(); });
   $('#albumView').addEventListener('change', () => {
+    resetLibraryPage();
     state.albumView = $('#albumView').value;
     if ($('#uploadAlbum')) $('#uploadAlbum').value = state.albumView;
     const del = $('#albumDelete');
@@ -2365,8 +2456,15 @@ async function init() {
   if (!$('#seqStatus').classList.contains('bad')) setSeqStatus(sequenceSpan(state.sequence.steps));
   updateSendButton();
   await pollRate();
-  setInterval(() => pollRate(), 4000);
-  setInterval(() => { if (!state.sending) loadUsers(true); }, 20000);
+  // A hidden tab skips the header refreshes and catches up when it is shown again.
+  // A send or a sequence asks for the rate itself before each command, so it is not slowed.
+  setInterval(() => { if (!document.hidden) pollRate(); }, 4000);
+  setInterval(refreshUsersQuiet, 20000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    pollRate();
+    refreshUsersQuiet();
+  });
   await checkUpdate();
 }
 
