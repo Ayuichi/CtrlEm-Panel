@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-16
+
+### Sequences are easier to edit
+
+A message or a write can be corrected in its row. Click a step and the next one is added after it. Click the empty part of the list to add at the end again. Drag a step by the row itself. The row stays where it is, a faint copy follows the pointer, and the step moves when you let go. The wait and the move buttons stay on one line at the right of the row. **Add write** and **Add open page** sit with the other sequence buttons.
+
+**Write**, **Wallpaper**, and **Open page** can be added. **Add write** and **Add open page** are their own buttons. **Add image**, **Add video**, **Add sound**, and **Add wallpaper** follow the command tab. A write types into the active window, up to 200 characters, and can repeat from 1 to 5 times. Wallpaper is desktop only. A page is sent as its own link and is not copied to Pomf.
+
+The album menus are in alphabetical order.
+
+Close the panel and start it again so this can load, then refresh the page.
+
 ## 2026-10-15
 
 ### Updates are signed

@@ -44,6 +44,7 @@ const state = {
   lastSent: new Map(),   // code -> ms, so the same person is not sent twice inside 3s
   blankAt: new Map(),    // code -> ms, screenBlank is limited to once per 30s
   sequence: { id: '', name: '', steps: [] },
+  seqCursor: null,       // selected step index; the next add goes after it. null adds at the end
   sequences: [],
   seqView: 'edit',
   run: null,             // { name, steps } copied when Play is pressed
@@ -524,6 +525,7 @@ function showForm() {
   if (media && safeHttp($('#argUrl').value)) showPreview($('#argUrl').value, cmd.media);
   else if (!media) $('#preview').replaceChildren();
   updateSendButton();
+  updateSeqAddButton();
 }
 
 function updateSendButton() {
@@ -772,7 +774,7 @@ function scheduleLibrary() {
 async function refreshFiles() {
   try { state.library = await api('/api/library'); }
   catch (err) { state.library = []; logLine('Library: ' + explain(err), 'bad'); }
-  try { state.albums = await api('/api/albums'); }
+  try { state.albums = sortAlbums(await api('/api/albums')); }
   catch { /* keep the albums already loaded */ }
   if (state.albumView && !state.albums.some(a => a.id === state.albumView)) state.albumView = '';
   dropStaleThumbs();
@@ -832,6 +834,9 @@ async function loadLibrary() {
   dropStaleThumbs();
   renderLibrary();
 }
+function sortAlbums(list) {
+  return list.slice().sort((a, b) => String(a && a.name || '').localeCompare(String(b && b.name || ''), undefined, { sensitivity: 'base', numeric: true }));
+}
 async function loadAlbums(opts = {}) {
   let loaded = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -842,7 +847,7 @@ async function loadAlbums(opts = {}) {
     }
   }
   // A failed reload must not wipe a list the page already showed.
-  if (Array.isArray(loaded)) state.albums = loaded;
+  if (Array.isArray(loaded)) state.albums = sortAlbums(loaded);
   else if (!state.albums.length) state.albums = [];
   if (state.albumView && !state.albums.some(a => a && a.id === state.albumView)) state.albumView = '';
   renderAlbumSelects();
@@ -1366,22 +1371,26 @@ async function deleteAlbum() {
 }
 function addVisibleToSequence() {
   const have = new Set(state.sequence.steps.map(s => s.url));
+  const selected = Number.isInteger(state.seqCursor) && state.seqCursor >= 0 && state.seqCursor < state.sequence.steps.length;
+  const afterItem = selected ? state.seqCursor + 1 : 0;
   let added = 0;
   for (const entry of visibleFiles()) {
     if (entry.kind !== 'image' && entry.kind !== 'video' && entry.kind !== 'audio') continue;
     const url = safeHttp(entry.url);
     if (!url || have.has(url)) continue;
     have.add(url);
-    state.sequence.steps.push({
+    insertStep({
       kind: entry.kind,
       url,
       name: String(entry.name || nameFromUrl(url)).slice(0, 80),
       wait: defaultWait(),
-    });
+    }, true);
     added++;
   }
   renderSequence();
-  setSeqStatus(added ? 'Added ' + added + ' to the sequence.' : 'Nothing new to add. Links already in the sequence were left out.', !added);
+  setSeqStatus(added
+    ? 'Added ' + added + (afterItem ? ' after item ' + afterItem : ' at the end') + '.'
+    : 'Nothing new to add. Links already in the sequence were left out.', !added);
 }
 async function removeFromAlbum(albumId, hash) {
   try {
@@ -1454,7 +1463,10 @@ function commandForKind(kind) {
   const id = kind === 'image' ? 'popupImage'
     : kind === 'video' ? 'videoOverlay'
     : kind === 'audio' ? 'popupSound'
+    : kind === 'wallpaper' ? 'changeWallpaper'
+    : kind === 'page' ? 'openPage'
     : kind === 'message' ? 'sendMessage'
+    : kind === 'write' ? 'writeForMe'
     : kind === 'blank' ? 'screenBlank'
     : kind === 'reaction' ? 'reactionTest'
     : kind === 'lock' ? 'lockinput'
@@ -1467,6 +1479,7 @@ function stepLabel(kind) {
 }
 function stepCaption(step) {
   if (step.kind === 'message') return step.text || 'Message';
+  if (step.kind === 'write') return step.text || 'Write';
   if (step.kind === 'blank') return 'Blank screen';
   if (step.kind === 'reaction') return step.url ? (step.name || nameFromUrl(step.url)) : 'Reaction test';
   if (step.kind === 'lock') return 'Lock input';
@@ -1507,13 +1520,19 @@ function stepMark(step) {
   if (step.kind === 'video') return '▶';
   if (step.kind === 'audio') return '♪';
   if (step.kind === 'message') return 'Aa';
+  if (step.kind === 'write') return 'Wr';
+  if (step.kind === 'wallpaper') return 'Wp';
+  if (step.kind === 'page') return 'Pg';
   if (step.kind === 'blank') return '□';
   if (step.kind === 'reaction') return 'Rt';
   if (step.kind === 'lock') return 'Lk';
   return '•';
 }
+function stepShowsStill(step) {
+  return !!(step && step.url && step.kind !== 'page' && step.kind !== 'message' && step.kind !== 'write');
+}
 function seqStill(step) {
-  const entry = step && step.url ? libraryEntryForUrl(step.url) : null;
+  const entry = stepShowsStill(step) ? libraryEntryForUrl(step.url) : null;
   const preview = !!(entry && canPreview(entry, safeHttp(entry.url)));
   const slot = el('span', { class: 'seq-still', 'aria-hidden': 'true' });
   if (preview && /^[a-f0-9]{64}$/.test(entry.hash || '')) slot.dataset.hash = entry.hash;
@@ -1594,9 +1613,10 @@ function renderSequence() {
   const name = $('#seqName');
   if (name && document.activeElement !== name) name.value = state.sequence.name;
   renderSeqPick();
+  const scroll = list.scrollTop;
   forgetSeqStills(list);
   list.replaceChildren();
-  if (!state.sequence.steps.length) list.append(el('li', { class: 'empty' }, 'Nothing here yet. Add a link, a message, a blank, a reaction test, or a lock, or use + on an uploaded file.'));
+  if (!state.sequence.steps.length) list.append(el('li', { class: 'empty' }, 'Nothing here yet. Add a link, a message, a write, a page, a wallpaper, a blank, a reaction test, or a lock, or use + on an uploaded file.'));
   state.sequence.steps.forEach((step, i) => {
     const wait = el('input', { type: 'number', min: '3', max: '600', value: String(step.wait) });
     wait.addEventListener('change', () => {
@@ -1607,36 +1627,93 @@ function renderSequence() {
       if (!state.playing) renderRun();
     });
     const btn = (label, title, fn) => el('button', { type: 'button', title, onclick: fn }, label);
-    const row = [
-      seqStill(step),
-      el('span', { class: 'k' }, stepLabel(step.kind)),
-      el('span', { class: 'nm', title: step.url || step.text || '' }, stepCaption(step)),
+    const tools = [
       el('label', {}, 'Wait ', wait, ' s'),
     ];
-    if (step.url) row.push(btn('Save', 'Save this link in the selected album', () => saveLink(step.url, step.name, step.kind === 'reaction' ? 'image' : step.kind)));
-    row.push(
+    if (step.kind === 'write') {
+      const count = el('input', { type: 'number', min: '1', max: '5', value: String(step.count || 1), title: 'How many times to type this' });
+      count.addEventListener('change', () => {
+        step.count = Math.max(1, Math.min(5, Math.round(Number(count.value)) || 1));
+        count.value = String(step.count);
+      });
+      tools.push(el('label', {}, 'Count ', count));
+    }
+    tools.push(
       btn('↑', 'Move earlier', () => moveStep(i, -1)),
       btn('↓', 'Move later', () => moveStep(i, 1)),
       btn('×', 'Remove', () => removeStep(i)),
     );
-    list.append(el('li', { class: 'seq-step' }, row));
+    const row = [
+      seqStill(step),
+      el('span', { class: 'k' }, stepLabel(step.kind)),
+      stepEditor(step),
+      el('span', { class: 'seq-tools' }, tools),
+    ];
+    const li = el('li', { class: 'seq-step' + (state.seqCursor === i ? ' selected' : '') }, row);
+    li._step = step;
+    li.addEventListener('mousedown', ev => {
+      if (ev.button !== 0) return;
+      state.seqCursor = i;
+      list.querySelectorAll('.seq-step').forEach((node, n) => node.classList.toggle('selected', n === i));
+    });
+    bindStepDrag(li, step);
+    list.append(li);
   });
   watchSeqStills(list);
+  list.scrollTop = scroll;
+  const current = list.querySelector('.seq-step.selected');
+  if (current) current.scrollIntoView({ block: 'nearest' });
   updateSeqButtons();
   if (!state.playing) renderRun();
+}
+function stepEditor(step) {
+  if (step.kind === 'message' || step.kind === 'write') {
+    const max = step.kind === 'write' ? 200 : 2000;
+    const input = el('input', { type: 'text', class: 'nm', maxlength: String(max), value: step.text || '', spellcheck: 'false' });
+    input.addEventListener('input', () => { step.text = input.value.slice(0, max); });
+    return input;
+  }
+  return el('span', { class: 'nm', title: step.url || '' }, stepCaption(step));
+}
+function insertStep(step, quiet) {
+  const steps = state.sequence.steps;
+  const selected = Number.isInteger(state.seqCursor) && state.seqCursor >= 0 && state.seqCursor < steps.length;
+  const at = selected ? state.seqCursor + 1 : steps.length;
+  steps.splice(at, 0, step);
+  state.seqCursor = at;
+  if (quiet) return at;
+  const where = selected ? 'Added after item ' + at + '.' : 'Added at the end.';
+  setSeqStatus(where + ' ' + sequenceSpan(steps));
+  renderSequence();
+  return at;
 }
 function addStep(step) {
   const url = safeHttp(step.url);
   if (!url) { setSeqStatus('That link needs to start with http:// or https://.', true); return; }
-  if (step.kind !== 'image' && step.kind !== 'video' && step.kind !== 'audio') return;
-  state.sequence.steps.push({
+  if (step.kind !== 'image' && step.kind !== 'video' && step.kind !== 'audio' && step.kind !== 'wallpaper' && step.kind !== 'page') return;
+  insertStep({
     kind: step.kind,
     url,
-    name: String(step.name || nameFromUrl(url)).slice(0, 80),
+    name: String(step.name || knownLinkName(url) || nameFromUrl(url)).slice(0, 80),
     wait: Math.max(3, Math.min(600, Math.round(Number(step.wait)) || defaultWait())),
   });
-  setSeqStatus(sequenceSpan(state.sequence.steps));
-  renderSequence();
+}
+function seqAddSpec() {
+  const cmd = state.cmd;
+  if (cmd.id === 'popupImage') return { label: 'Add image', title: 'Shows this image.', run: () => addStep({ kind: 'image', url: $('#argUrl').value.trim() }) };
+  if (cmd.id === 'videoOverlay') return { label: 'Add video', title: 'Desktop only. Plays this video.', run: () => addStep({ kind: 'video', url: $('#argUrl').value.trim() }) };
+  if (cmd.id === 'popupSound') return { label: 'Add sound', title: 'Plays this sound.', run: () => addStep({ kind: 'audio', url: $('#argUrl').value.trim() }) };
+  if (cmd.id === 'changeWallpaper') return { label: 'Add wallpaper', title: 'Desktop only. Changes the wallpaper to this image.', run: () => addStep({ kind: 'wallpaper', url: $('#argUrl').value.trim() }) };
+  return null;
+}
+function updateSeqAddButton() {
+  const btn = $('#seqAdd');
+  if (!btn) return;
+  const spec = seqAddSpec();
+  setHidden(btn, !spec);
+  if (!spec) return;
+  btn.textContent = spec.label;
+  btn.title = spec.title;
 }
 function chosenAlbumId() {
   const picked = $('#uploadAlbum') && $('#uploadAlbum').value;
@@ -1655,24 +1732,31 @@ async function saveLink(url, name, kind) {
     setSeqStatus('Saved in ' + albumName + '.');
   } catch (err) { setSeqStatus(explain(err), true); }
 }
+function knownLinkName(url) {
+  const safe = safeHttp(url);
+  const known = state.library.find(e => e && (e.url === url || e.url === safe));
+  return known && known.name;
+}
 function addCurrentLink() {
-  const cmd = state.cmd;
-  if (!cmd.media) { setSeqStatus('Choose Image, Video, or Sound, then set a link.', true); return; }
-  const url = $('#argUrl').value.trim();
-  const known = state.library.find(e => e.url === url);
-  addStep({ kind: cmd.media, url, name: known && known.name });
+  const spec = seqAddSpec();
+  if (spec) spec.run();
 }
 function addMessageStep() {
   const text = $('#argText').value.trim().slice(0, 2000);
   if (!text) { setSeqStatus('Write the message first. It is the text in the Message box.', true); return; }
-  state.sequence.steps.push({ kind: 'message', text, wait: defaultWait() });
-  setSeqStatus(sequenceSpan(state.sequence.steps));
-  renderSequence();
+  insertStep({ kind: 'message', text, wait: defaultWait() });
+}
+function addPageStep() {
+  addStep({ kind: 'page', url: $('#argUrl').value.trim(), name: knownLinkName($('#argUrl').value.trim()) });
+}
+function addWriteStep() {
+  const text = $('#argText').value.trim().slice(0, 200);
+  if (!text) { setSeqStatus('Write the text first. It is the text in the Write box.', true); return; }
+  const count = Math.max(1, Math.min(5, Math.round(Number($('#argCount').value)) || 1));
+  insertStep({ kind: 'write', text, count, wait: defaultWait() });
 }
 function addPlainStep(kind) {
-  state.sequence.steps.push({ kind, wait: defaultWait() });
-  setSeqStatus(sequenceSpan(state.sequence.steps));
-  renderSequence();
+  insertStep({ kind, wait: defaultWait() });
 }
 function addReactionStep() {
   const raw = $('#argUrl').value.trim();
@@ -1689,31 +1773,130 @@ function addReactionStep() {
     setSeqStatus('Set an image link first. They see that image if they pass the reaction test.', true);
     return;
   }
-  state.sequence.steps.push({
+  insertStep({
     kind: 'reaction',
     url,
     name: String((known && known.name) || nameFromUrl(url)).slice(0, 80),
     wait: defaultWait(),
   });
-  setSeqStatus(sequenceSpan(state.sequence.steps));
-  renderSequence();
 }
 function addLibraryStep(entry) {
   if (!entry) return;
   addStep({ kind: entry.kind, url: entry.url, name: entry.name });
 }
+let stepDrag = null;
+function bindStepDrag(li, step) {
+  li.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0 || stepDrag) return;
+    if (ev.target.closest('input, button, textarea, select, a')) return;
+    ev.preventDefault();
+    const list = $('#seqSteps');
+    const i = state.sequence.steps.indexOf(step);
+    if (!list || i < 0) return;
+    li.setPointerCapture(ev.pointerId);
+    state.seqCursor = i;
+    list.querySelectorAll('.seq-step').forEach((node, n) => node.classList.toggle('selected', n === i));
+    stepDrag = { pointer: ev.pointerId, li, step, from: i, dest: i, y0: ev.clientY, y: ev.clientY, moved: false, ghost: null };
+  });
+  li.addEventListener('pointermove', ev => {
+    if (!stepDrag || ev.pointerId !== stepDrag.pointer) return;
+    stepDrag.y = ev.clientY;
+    if (!stepDrag.moved) {
+      if (Math.abs(ev.clientY - stepDrag.y0) < 4) return;
+      liftStep(stepDrag);
+    }
+    moveGhost(stepDrag);
+    markDrop(ev.clientY);
+  });
+  const finish = ev => {
+    if (!stepDrag || ev.pointerId !== stepDrag.pointer) return;
+    finishStepDrag();
+  };
+  li.addEventListener('pointerup', finish);
+  li.addEventListener('pointercancel', finish);
+}
+function liftStep(drag) {
+  const rect = drag.li.getBoundingClientRect();
+  const ghost = drag.li.cloneNode(true);
+  ghost.classList.remove('selected');
+  ghost.classList.add('seq-ghost');
+  ghost.querySelectorAll('input, button').forEach(node => { node.disabled = true; });
+  ghost.style.left = rect.left + 'px';
+  ghost.style.width = rect.width + 'px';
+  ghost.style.top = rect.top + 'px';
+  document.body.appendChild(ghost);
+  drag.ghost = ghost;
+  drag.offset = drag.y0 - rect.top;
+  drag.moved = true;
+  document.body.classList.add('seq-dragging');
+  requestAnimationFrame(stepDragFrame);
+}
+function moveGhost(drag) {
+  if (!drag.ghost) return;
+  drag.ghost.style.top = (drag.y - drag.offset) + 'px';
+}
+function stepDragFrame() {
+  if (!stepDrag || !stepDrag.moved) return;
+  const list = $('#seqSteps');
+  if (!list) return;
+  const box = list.getBoundingClientRect();
+  if (stepDrag.y < box.top + 32) list.scrollTop -= 18;
+  else if (stepDrag.y > box.bottom - 32) list.scrollTop += 18;
+  moveGhost(stepDrag);
+  markDrop(stepDrag.y);
+  if (stepDrag) requestAnimationFrame(stepDragFrame);
+}
+function markDrop(y) {
+  const list = $('#seqSteps');
+  if (!list || !stepDrag) return;
+  const rows = [...list.querySelectorAll(':scope > .seq-step')];
+  rows.forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  let slot = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    const rect = rows[i].getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) { slot = i; break; }
+  }
+  if (slot < rows.length) rows[slot].classList.add('drop-before');
+  else if (rows.length) rows[rows.length - 1].classList.add('drop-after');
+  stepDrag.dest = slot > stepDrag.from ? slot - 1 : slot;
+}
+function finishStepDrag() {
+  const drag = stepDrag;
+  stepDrag = null;
+  if (!drag) return;
+  document.body.classList.remove('seq-dragging');
+  document.querySelectorAll('#seqSteps .seq-step').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  if (drag.ghost) drag.ghost.remove();
+  if (drag.moved) {
+    const swallow = ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      window.removeEventListener('click', swallow, true);
+    };
+    window.addEventListener('click', swallow, true);
+  }
+  if (!drag.moved || drag.dest === drag.from) return;
+  moveStepTo(drag.from, drag.dest);
+}
 function moveStep(i, dir) {
+  const dest = i + dir;
+  if (dest < 0 || dest >= state.sequence.steps.length) return;
+  moveStepTo(i, dest);
+}
+function moveStepTo(from, to) {
   const steps = state.sequence.steps;
-  const j = i + dir;
-  if (j < 0 || j >= steps.length) return;
-  const tmp = steps[i];
-  steps[i] = steps[j];
-  steps[j] = tmp;
+  const dest = Math.max(0, Math.min(steps.length - 1, to));
+  if (dest !== from) {
+    const [step] = steps.splice(from, 1);
+    steps.splice(dest, 0, step);
+  }
+  state.seqCursor = dest;
   setSeqStatus(sequenceSpan(steps));
   renderSequence();
 }
 function removeStep(i) {
   state.sequence.steps.splice(i, 1);
+  state.seqCursor = state.sequence.steps.length ? Math.min(i, state.sequence.steps.length - 1) : null;
   setSeqStatus(sequenceSpan(state.sequence.steps));
   renderSequence();
 }
@@ -1723,10 +1906,15 @@ async function loadSequences() {
   renderSeqPick();
 }
 function applySequence(seq) {
+  state.seqCursor = null;
   state.sequence = {
     id: seq.id,
     name: seq.name,
-    steps: seq.steps.map(s => ({ kind: s.kind, url: s.url || '', text: s.text || '', name: s.name || '', wait: s.wait })),
+    steps: seq.steps.map(s => {
+      const step = { kind: s.kind, url: s.url || '', text: s.text || '', name: s.name || '', wait: s.wait };
+      if (s.kind === 'write') step.count = Math.max(1, Math.min(5, Math.round(Number(s.count)) || 1));
+      return step;
+    }),
   };
   const name = $('#seqName');
   if (name) name.value = seq.name;
@@ -1734,6 +1922,7 @@ function applySequence(seq) {
   renderSequence();
 }
 function newSequence() {
+  state.seqCursor = null;
   state.sequence = { id: '', name: '', steps: [] };
   const name = $('#seqName');
   if (name) name.value = '';
@@ -1794,7 +1983,7 @@ async function playSequence() {
       const pending = [];
       const seen = new Set();
       for (const step of steps) {
-        if (!step.url || !needsPomfMirror(step.url) || seen.has(step.url)) continue;
+        if (!step.url || step.kind === 'page' || !needsPomfMirror(step.url) || seen.has(step.url)) continue;
         seen.add(step.url);
         pending.push(step);
       }
@@ -1872,20 +2061,21 @@ async function playSequence() {
         if (state.seqStop) break;
         await waitUserCooldown(code);
         if (state.seqStop) break;
-        let argument = step.kind === 'message' ? step.text : (step.url || '');
-        if (step.url && isPomf(code) && needsPomfMirror(step.url)) {
+        let argument = (step.kind === 'message' || step.kind === 'write') ? String(step.text || '').trim() : (step.url || '');
+        if (step.kind !== 'page' && step.url && isPomf(code) && needsPomfMirror(step.url)) {
           argument = mirrors.get(step.url) || '';
           if (!argument) {
             logLine(labelOf(code) + ': skipped ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ', the Pomf copy is not available.', 'bad');
             continue;
           }
         }
-        if ((step.kind === 'message' || step.url) && !argument) {
+        if ((step.kind === 'message' || step.kind === 'write' || step.url) && !argument) {
           logLine(labelOf(code) + ': skipped ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ', it has nothing to send.', 'bad');
           continue;
         }
         const body = { target: code, command: cmd.id };
-        if (argument && (step.kind === 'message' || step.url)) body.argument = argument;
+        if (argument && (step.kind === 'message' || step.kind === 'write' || step.url)) body.argument = argument;
+        if (cmd.count) body.count = Math.max(1, Math.min(5, Math.round(Number(step.count)) || 1));
         const picked = selectedDevice();
         if (picked) body.targetDevice = picked;
         else if (cmd.desktop) body.targetDevice = 'DESKTOP';
@@ -2076,7 +2266,14 @@ function bind() {
   $('#albumDelete').addEventListener('click', deleteAlbum);
   $('#albumAddAll').addEventListener('click', addVisibleToSequence);
   $('#seqAdd').addEventListener('click', addCurrentLink);
+  $('#seqSteps').addEventListener('mousedown', ev => {
+    if (ev.target !== $('#seqSteps')) return;
+    state.seqCursor = null;
+    $('#seqSteps').querySelectorAll('.seq-step').forEach(node => node.classList.remove('selected'));
+  });
   $('#seqAddMessage').addEventListener('click', addMessageStep);
+  $('#seqAddWrite').addEventListener('click', addWriteStep);
+  $('#seqAddPage').addEventListener('click', addPageStep);
   $('#seqAddBlank').addEventListener('click', () => addPlainStep('blank'));
   $('#seqAddReaction').addEventListener('click', addReactionStep);
   $('#seqAddLock').addEventListener('click', () => addPlainStep('lock'));

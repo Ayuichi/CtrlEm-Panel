@@ -562,9 +562,9 @@ function isHttpUrl(value) {
 }
 
 // sequences: [{ id, name, steps, updatedAt }]
-// A file step is { kind: image|video|audio, url, name, wait }.
-// An action step is { kind: message, text, wait }, { kind: blank|lock, wait },
-// or { kind: reaction, wait } with an optional image url and name.
+// A file step is { kind: image|video|audio|wallpaper|page, url, name, wait }.
+// An action step is { kind: message, text, wait }, { kind: write, text, count, wait },
+// { kind: blank|lock, wait }, or { kind: reaction, wait } with an optional image url and name.
 let sequences = readJson(SEQUENCES_FILE, []);
 if (!Array.isArray(sequences)) sequences = [];
 const saveSequences = () => writeJson(SEQUENCES_FILE, sequences);
@@ -575,13 +575,19 @@ function cleanSequence(b) {
   if (!name) throw new Error('Name the sequence');
   if (!Array.isArray(b.steps) || !b.steps.length) throw new Error('Add at least one item');
   const steps = b.steps.map(s => {
-    const kind = s && (s.kind === 'image' || s.kind === 'video' || s.kind === 'audio' || s.kind === 'message' || s.kind === 'blank' || s.kind === 'reaction' || s.kind === 'lock') ? s.kind : '';
-    if (!kind) throw new Error('Each item has to be an image, video, sound, message, blank screen, reaction test, or lock input');
+    const kind = s && (s.kind === 'image' || s.kind === 'video' || s.kind === 'audio' || s.kind === 'wallpaper' || s.kind === 'page' || s.kind === 'message' || s.kind === 'write' || s.kind === 'blank' || s.kind === 'reaction' || s.kind === 'lock') ? s.kind : '';
+    if (!kind) throw new Error('Each item has to be an image, video, sound, wallpaper, page, message, write, blank screen, reaction test, or lock input');
     const wait = Math.max(3, Math.min(600, Math.round(Number(s.wait)) || 5));
     if (kind === 'message') {
       const text = String(s.text || '').trim().slice(0, 2000);
       if (!text) throw new Error('A message step needs text');
       return { kind, text, wait };
+    }
+    if (kind === 'write') {
+      const text = String(s.text || '').trim().slice(0, 200);
+      if (!text) throw new Error('A write step needs text');
+      const count = Math.max(1, Math.min(5, Math.round(Number(s.count)) || 1));
+      return { kind, text, count, wait };
     }
     if (kind === 'blank' || kind === 'lock') return { kind, wait };
     if (kind === 'reaction') {
@@ -591,7 +597,7 @@ function cleanSequence(b) {
       return { kind, url, name: String(s.name || '').trim().slice(0, 80), wait };
     }
     const url = String(s.url || '').trim();
-    if (!isHttpUrl(url) || url.length > 2000) throw new Error('Each file needs an http or https link');
+    if (!isHttpUrl(url) || url.length > 2000) throw new Error(kind === 'page' ? 'A page needs an http or https link' : 'Each file needs an http or https link');
     return { kind, url, name: String(s.name || '').trim().slice(0, 80), wait };
   });
   return { id, name, steps, updatedAt: Date.now() };

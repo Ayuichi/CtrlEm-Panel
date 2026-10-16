@@ -196,18 +196,28 @@ h2.sub { margin: 18px 0 6px; color: var(--muted); font-size: 13px; text-transfor
 .seq-bar input[type=number] { width: 64px; }
 .seq-steps { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow: auto; }
 .seq-steps .empty { color: var(--muted); font-size: 12px; padding: 4px 0; }
-.seq-step { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--panel2); border-radius: var(--radius); padding: 4px 6px; }
-.seq-step.playing { outline: 1px solid var(--accent); }
+.seq-step { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; background: var(--panel2); border-radius: var(--radius); padding: 4px 6px; }
+.seq-step.playing, .seq-step.selected { outline: 1px solid var(--accent); }
 .seq-still { flex: none; width: 42px; height: 42px; border-radius: 4px; overflow: hidden; background: var(--bg); display: flex; align-items: center; justify-content: center; position: relative; }
 .seq-still img.still { width: 100%; height: 100%; object-fit: cover; display: block; }
 .seq-still .kind { font-size: 13px; color: var(--muted); line-height: 1; }
 .seq-still .mark { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--overlay); color: #fff; font-size: 8px; line-height: 1; padding-left: 1px; pointer-events: none; }
-.seq-step .k { font-size: 11px; color: var(--muted); width: 68px; flex: none; text-transform: capitalize; }
+.seq-step .k { font-size: 11px; color: var(--muted); width: 76px; flex: none; text-transform: capitalize; }
 .seq-step .wait { font-size: 11px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
 .seq-step .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seq-tools { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
+.seq-step > .wait { margin-left: auto; }
+.seq-step input.nm { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; }
+#seqSteps .seq-step { cursor: grab; }
+#seqSteps .seq-step input { cursor: text; }
+#seqSteps .seq-step button { cursor: pointer; }
 .seq-step label { display: flex; gap: 4px; align-items: center; font-size: 11px; color: var(--muted); flex: none; }
 .seq-step input[type=number] { width: 56px; }
 .seq-step button { padding: 2px 6px; }
+.seq-ghost { position: fixed; z-index: 40; margin: 0; opacity: 0.6; pointer-events: none; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35); }
+#seqSteps .seq-step.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+#seqSteps .seq-step.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+body.seq-dragging, body.seq-dragging #seqSteps .seq-step, body.seq-dragging #seqSteps .seq-step button, body.seq-dragging #seqSteps .seq-step input { cursor: grabbing; user-select: none; }
 .hint.bad { color: var(--bad); }
 
 .activity { list-style: none; margin: 0; padding: 0; font-size: 12px; overflow: auto; flex: 1; min-height: 80px; }
