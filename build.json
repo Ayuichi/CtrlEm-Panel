@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "files": [
     ".gitignore",
     "CHANGELOG.md",
@@ -15,15 +15,15 @@
   ],
   "hashes": {
     ".gitignore": "843c23fccca8570c3dfd8b0e463573cfc590a5c42aa6688c1c909660c02bf0cc",
-    "CHANGELOG.md": "19ce865d9a29a287295e3baa6faae98dae7e0e3a82ab01dda5cc69481ce506d5",
-    "README.md": "e77dc61ab5cfb73d6bbc233c5470869891c974f696687ed387ebd11a7c9d4817",
+    "CHANGELOG.md": "53f854312c152431eca34d4cf3a6e3f23b7f2ce3fb742ebb6afe468582d6b484",
+    "README.md": "672815ee2bd40a64202a6c4d499e802a588eb57a409d5995d573578facff7454",
     "Start Panel.bat": "b77bf0c86230f83b223654a99c88c0651d10b860deacb9ab8d80320221003a43",
     "server.js": "a1ef79d6ff3cbaa0402d13d0d0d7d54b78fa85deed1123f327181e1fe308bc08",
-    "public/app.js": "ef37b6c508531a5edecbeb2a05665db3f5751b97000c3a67a483f4225a351b1e",
-    "public/index.html": "dd9f5d7f75388691315a0b26d3202c4f43e587613d6d01d1382a411d1ff4ebfc",
-    "public/style.css": "e9ca676c42f7a07200cc7cc1a90ab7c86010cef438934c21e30652c758391d49",
+    "public/app.js": "83a6b0bdc28c6e97230ae23fc6f2b75760e326d27213acd826ba4c06b65e8c04",
+    "public/index.html": "005bae1b3dc357472164b80dd58ebd3c3a496577a381c993d212d74ce2c4d79c",
+    "public/style.css": "f3199224a08088b4b3f2f1b5da60d2b644535b932587139bb0a928d138c5604c",
     "public/theme-leaves.svg": "dde5d142d43b03ed1810119bb2ac0bf281c94f8090bf69050a50ff2148e3f907",
     "public/theme-sparkle.svg": "9e81ba60a1a3fd027d2ad958a695a18de148b072e4e8a086d176e81fa017e41e"
   },
-  "signature": "6fo1tLWGImzrS5iPN87duOppYgY1/YZlqB15USp6/cAg3gpgfikYg7b6CWTo92zhaWAn3UDQ5qi0ZYUol05XDg=="
+  "signature": "WxU/mdZ366nsXDnfaNzQHlqC8EuW8p35jbrX8ICWj7uwDpyiP+Ff7AfmyWb/2C51JNWO18ua4FFQe75oJL23CQ=="
 }

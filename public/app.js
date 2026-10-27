@@ -51,6 +51,7 @@ const state = {
   playing: false,
   seqStop: false,
   seqIndex: -1,
+  seqFrom: null,         // Send-list step Play starts at. null starts at the first step
   mirrorAbort: null,
 };
 
@@ -1585,7 +1586,9 @@ function updateSeqButtons() {
     : !state.targets.length ? 'Pick someone first.'
     : '';
   play.disabled = !!why;
-  play.title = why;
+  const from = state.playing ? null : chosenStart(state.sequence.steps.length);
+  play.textContent = from == null ? 'Play' : 'Play from ' + (from + 1);
+  play.title = why || (from == null ? '' : 'Starts at step ' + (from + 1));
   stop.disabled = !state.playing;
   const tab = document.querySelector('[data-seq-tab="send"]');
   if (tab) {
@@ -1668,24 +1671,27 @@ function renderRun() {
   const label = $('#seqRunLabel');
   const live = !!(state.playing && state.run);
   const steps = live ? state.run.steps : state.sequence.steps;
+  const from = chosenStart(steps.length);
   if (label) {
     if (live) label.textContent = (state.run.name || 'This send') + ' is the copy from when you pressed Play. Edit can change the next one.';
-    else label.textContent = steps.length
-      ? 'Play sends the sequence open in Edit, copied at that moment.'
-      : 'Nothing to send yet. Add items in Edit.';
+    else if (!steps.length) label.textContent = 'Nothing to send yet. Add items in Edit.';
+    else if (from != null) label.textContent = 'Play starts at step ' + (from + 1) + '. Click that step again to start from the beginning.';
+    else label.textContent = 'Play sends the sequence open in Edit, copied at that moment. Click a step to start there.';
   }
   forgetSeqStills(list);
+  list.classList.toggle('picking', !live && steps.length > 0);
   list.replaceChildren();
   if (!steps.length) list.append(el('li', { class: 'empty' }, 'Nothing here yet. Add items in Edit.'));
   steps.forEach((step, i) => {
-    list.append(el('li', { class: 'seq-step' + (live && state.seqIndex === i ? ' playing' : '') },
+    const picked = !live && from === i;
+    list.append(el('li', { class: 'seq-step' + (live && state.seqIndex === i ? ' playing' : '') + (picked ? ' selected' : ''), 'aria-selected': picked ? 'true' : false },
       seqStill(step),
       el('span', { class: 'k' }, stepLabel(step.kind)),
       el('span', { class: 'nm', title: step.url || step.text || '' }, stepCaption(step)),
       el('span', { class: 'wait' }, Math.max(3, Number(step.wait) || 3) + 's')));
   });
   watchSeqStills(list);
-  const current = list.querySelector('.playing');
+  const current = list.querySelector('.playing, .selected');
   if (current) current.scrollIntoView({ block: 'nearest' });
   updateSeqButtons();
 }
@@ -1771,6 +1777,7 @@ function insertStep(step, quiet) {
   const at = selected ? state.seqCursor + 1 : steps.length;
   steps.splice(at, 0, step);
   state.seqCursor = at;
+  if (!state.playing && Number.isInteger(state.seqFrom) && at <= state.seqFrom) state.seqFrom++;
   if (quiet) return at;
   const where = selected ? 'Added after item ' + at + '.' : 'Added at the end.';
   setSeqStatus(where + ' ' + sequenceSpan(steps));
@@ -1981,11 +1988,23 @@ function moveStepTo(from, to) {
     steps.splice(dest, 0, step);
   }
   state.seqCursor = dest;
+  if (!state.playing) state.seqFrom = slideIndex(state.seqFrom, from, dest);
   setSeqStatus(sequenceSpan(steps));
   renderSequence();
 }
+function slideIndex(index, from, dest) {
+  if (!Number.isInteger(index)) return index;
+  if (index === from) return dest;
+  if (from < index && dest >= index) return index - 1;
+  if (from > index && dest <= index) return index + 1;
+  return index;
+}
 function removeStep(i) {
   state.sequence.steps.splice(i, 1);
+  if (!state.playing) {
+    if (state.seqFrom === i) state.seqFrom = null;
+    else if (Number.isInteger(state.seqFrom) && state.seqFrom > i) state.seqFrom--;
+  }
   state.seqCursor = state.sequence.steps.length ? Math.min(i, state.sequence.steps.length - 1) : null;
   setSeqStatus(sequenceSpan(state.sequence.steps));
   renderSequence();
@@ -1997,6 +2016,7 @@ async function loadSequences() {
 }
 function applySequence(seq) {
   state.seqCursor = null;
+  if (!(seq.id && seq.id === state.sequence.id)) state.seqFrom = null;
   state.sequence = {
     id: seq.id,
     name: seq.name,
@@ -2008,11 +2028,13 @@ function applySequence(seq) {
   };
   const name = $('#seqName');
   if (name) name.value = seq.name;
+  if (Number.isInteger(state.seqFrom) && state.seqFrom >= state.sequence.steps.length) state.seqFrom = null;
   setSeqStatus(sequenceSpan(state.sequence.steps));
   renderSequence();
 }
 function newSequence() {
   state.seqCursor = null;
+  state.seqFrom = null;
   state.sequence = { id: '', name: '', steps: [] };
   const name = $('#seqName');
   if (name) name.value = '';
@@ -2044,6 +2066,23 @@ async function deleteSequence() {
 function givesUp(reason) {
   return /offline|script access is off|no device online/i.test(reason);
 }
+// A write step stays a write when that person allows it. When write is turned off
+// and a message is still allowed, the same text is sent as a message. The repeat
+// count is only for write. Other failures (offline, script access) are unchanged.
+function resolveStepCommand(code, step) {
+  const cmd = commandForKind(step.kind);
+  if (!cmd) return { ok: false, reason: 'Unknown step' };
+  const check = targetAllows(code, cmd);
+  if (check.ok || step.kind !== 'write' || check.reason !== 'Command is turned off') return Object.assign({ cmd }, check);
+  const message = commandForKind('message');
+  const asMessage = message && targetAllows(code, message);
+  if (asMessage && asMessage.ok) return { ok: true, cmd: message, asMessage: true };
+  return { ok: false, cmd, reason: check.reason };
+}
+function chosenStart(count) {
+  if (!Number.isInteger(state.seqFrom) || state.seqFrom < 0 || state.seqFrom >= count) return null;
+  return state.seqFrom;
+}
 async function playSequence() {
   if (state.sending || state.playing) return;
   const steps = state.sequence.steps.map(s => Object.assign({}, s));
@@ -2051,6 +2090,8 @@ async function playSequence() {
   if (!state.config || !state.config.hasKey) { setRunStatus('Add an API key in Settings first.', true); return; }
   if (!state.targets.length) { setRunStatus('Pick someone first.', true); return; }
 
+  const picked = chosenStart(steps.length);
+  const start = picked == null ? 0 : picked;
   state.run = { name: ($('#seqName') && $('#seqName').value.trim()) || '', steps };
   state.playing = true;
   state.sending = true;
@@ -2060,6 +2101,7 @@ async function playSequence() {
   renderRun();
   const alive = new Set(state.targets);
   const noted = new Set();
+  let keepAt;
   try {
     for (const code of [...alive]) {
       if (state.seqStop) break;
@@ -2072,7 +2114,8 @@ async function playSequence() {
     if ([...alive].some(isPomf)) {
       const pending = [];
       const seen = new Set();
-      for (const step of steps) {
+      for (let i = start; i < steps.length; i++) {
+        const step = steps[i];
         if (!step.url || step.kind === 'page' || !needsPomfMirror(step.url) || seen.has(step.url)) continue;
         seen.add(step.url);
         pending.push(step);
@@ -2120,7 +2163,7 @@ async function playSequence() {
         }
       }
     }
-    for (let i = 0; i < steps.length; i++) {
+    for (let i = start; i < steps.length; i++) {
       if (state.seqStop || !alive.size) break;
       state.seqIndex = i;
       renderRun();
@@ -2130,20 +2173,30 @@ async function playSequence() {
       setRunStatus('Sending ' + (i + 1) + ' of ' + steps.length + '. Keep this page open.');
       const ready = [];
       for (const code of alive) {
-        const check = targetAllows(code, cmd);
+        const check = resolveStepCommand(code, step);
         if (!check.ok) {
           const key = code + '|' + cmd.id + '|' + check.reason;
           if (!noted.has(key)) { noted.add(key); logLine(labelOf(code) + ': skipped ' + cmd.label + ', ' + check.reason + '.', 'bad'); }
           if (givesUp(check.reason)) alive.delete(code);
-        } else ready.push(code);
+        } else {
+          if (check.asMessage) {
+            const key = code + '|write-as-message';
+            if (!noted.has(key)) {
+              noted.add(key);
+              logLine(labelOf(code) + ': write is turned off, so the text goes as a message.', '');
+            }
+          }
+          ready.push({ code, cmd: check.cmd });
+        }
       }
       for (let t = 0; t < ready.length; t++) {
         if (state.seqStop) break;
-        const code = ready[t];
-        if (cmd.id === 'screenBlank') {
+        const code = ready[t].code;
+        const sendCmd = ready[t].cmd;
+        if (sendCmd.id === 'screenBlank') {
           const left = blankWaitLeft(code);
           if (left > 0) {
-            logLine(labelOf(code) + ': skipped ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ', blank screen can run again in ' + Math.ceil(left / 1000) + 's.', 'bad');
+            logLine(labelOf(code) + ': skipped ' + sendCmd.label + ' ' + (i + 1) + '/' + steps.length + ', blank screen can run again in ' + Math.ceil(left / 1000) + 's.', 'bad');
             continue;
           }
         }
@@ -2155,29 +2208,29 @@ async function playSequence() {
         if (step.kind !== 'page' && step.url && isPomf(code) && needsPomfMirror(step.url)) {
           argument = mirrors.get(step.url) || '';
           if (!argument) {
-            logLine(labelOf(code) + ': skipped ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ', the Pomf copy is not available.', 'bad');
+            logLine(labelOf(code) + ': skipped ' + sendCmd.label + ' ' + (i + 1) + '/' + steps.length + ', the Pomf copy is not available.', 'bad');
             continue;
           }
         }
         if ((step.kind === 'message' || step.kind === 'write' || step.url) && !argument) {
-          logLine(labelOf(code) + ': skipped ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ', it has nothing to send.', 'bad');
+          logLine(labelOf(code) + ': skipped ' + sendCmd.label + ' ' + (i + 1) + '/' + steps.length + ', it has nothing to send.', 'bad');
           continue;
         }
-        const body = { target: code, command: cmd.id };
+        const body = { target: code, command: sendCmd.id };
         if (argument && (step.kind === 'message' || step.kind === 'write' || step.url)) body.argument = argument;
-        if (cmd.count) body.count = Math.max(1, Math.min(5, Math.round(Number(step.count)) || 1));
+        if (sendCmd.count) body.count = Math.max(1, Math.min(5, Math.round(Number(step.count)) || 1));
         const picked = selectedDevice();
         if (picked) body.targetDevice = picked;
-        else if (cmd.desktop) body.targetDevice = 'DESKTOP';
+        else if (sendCmd.desktop) body.targetDevice = 'DESKTOP';
         try {
           const res = await postCommand(body);
           if (state.seqStop) break;
           state.lastSent.set(code, Date.now());
-          if (cmd.id === 'screenBlank') state.blankAt.set(code, Date.now());
+          if (sendCmd.id === 'screenBlank') state.blankAt.set(code, Date.now());
           const mark = res && res.commandId ? ' · ' + res.commandId : '';
           const via = isPomfHost(argument) && argument !== step.url ? ' via Pomf' : '';
-          if (res && res.success === false) logLine(labelOf(code) + ': ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ' was refused' + via + mark + '.', 'bad');
-          else logLine(labelOf(code) + ': ' + cmd.label + ' ' + (i + 1) + '/' + steps.length + ' sent' + via + mark + '.', 'ok');
+          if (res && res.success === false) logLine(labelOf(code) + ': ' + sendCmd.label + ' ' + (i + 1) + '/' + steps.length + ' was refused' + via + mark + '.', 'bad');
+          else logLine(labelOf(code) + ': ' + sendCmd.label + ' ' + (i + 1) + '/' + steps.length + ' sent' + via + mark + '.', 'ok');
         } catch (err) {
           logLine(labelOf(code) + ': ' + explain(err), 'bad');
           if (err.status === 400 || err.status === 403 || err.status === 404) alive.delete(code);
@@ -2189,10 +2242,26 @@ async function playSequence() {
       if (state.seqStop || !alive.size || i === steps.length - 1) break;
       if (!await countdown(Math.max(3, step.wait) * 1000, i, steps.length)) break;
     }
-    if (state.seqStop) { logLine('Sequence stopped.', ''); setRunStatus('Stopped.'); }
-    else if (!alive.size) { logLine('Sequence stopped. Nobody left who can receive it.', 'bad'); setRunStatus('Stopped. Nobody left who can receive it.', true); }
-    else { logLine('Sequence finished.', 'ok'); setRunStatus('Finished. ' + sequenceSpan(steps)); }
+    if (state.seqStop) {
+      keepAt = state.seqIndex >= 0 ? state.seqIndex : start;
+      logLine('Sequence stopped.', '');
+      setRunStatus('Stopped.');
+    } else if (!alive.size) {
+      keepAt = state.seqIndex >= 0 ? state.seqIndex : start;
+      logLine('Sequence stopped. Nobody left who can receive it.', 'bad');
+      setRunStatus('Stopped. Nobody left who can receive it.', true);
+    } else {
+      keepAt = null;
+      logLine('Sequence finished.', 'ok');
+      setRunStatus('Finished. ' + sequenceSpan(steps));
+    }
+  } catch (err) {
+    keepAt = state.seqIndex >= 0 ? state.seqIndex : start;
+    logLine(explain(err), 'bad');
+    setRunStatus(explain(err), true);
   } finally {
+    const draft = state.sequence.steps.length;
+    state.seqFrom = Number.isInteger(keepAt) && keepAt >= 0 && keepAt < draft ? keepAt : null;
     state.playing = false;
     state.sending = false;
     state.seqStop = false;
@@ -2377,6 +2446,17 @@ function bind() {
   });
   document.querySelectorAll('.seq-tab').forEach(btn => btn.addEventListener('click', () => showSeqTab(btn.dataset.seqTab)));
   $('#seqPlay').addEventListener('click', playSequence);
+  $('#seqRun').addEventListener('click', ev => {
+    if (state.playing) return;
+    const row = ev.target.closest('.seq-step');
+    if (!row || row.parentElement !== $('#seqRun')) {
+      state.seqFrom = null;
+    } else {
+      const i = [...$('#seqRun').children].indexOf(row);
+      state.seqFrom = i < 0 || state.seqFrom === i ? null : i;
+    }
+    renderRun();
+  });
   $('#seqStop').addEventListener('click', () => {
     if (!state.playing) return;
     state.seqStop = true;

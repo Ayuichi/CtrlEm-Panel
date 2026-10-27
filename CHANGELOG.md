@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-27
+
+### Play can start at a later step
+
+On **Send**, click a step and **Play** starts there. The button reads **Play from** that step. Click the step again to start from the beginning. **Stop** leaves that step marked, so the next **Play** continues from it. A run that finishes clears the mark. Copying to Pomf covers only the steps from the start step on.
+
+Refresh the page. The panel does not need to be started again.
+
+## 2026-10-26
+
+### A write step can go out as a message
+
+When a sequence is sent, a write step still types into the window for someone who allows Write. If that person has turned Write off and still allows Message, the same text is sent as a message instead. It is sent once, without the write repeat. If Message is off too, that step is skipped for them. Anyone else in the send still gets a write.
+
+Refresh the page. The panel does not need to be started again.
+
 ## 2026-10-16
 
 ### A large file list is quicker
